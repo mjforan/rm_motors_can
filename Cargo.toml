@@ -6,6 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.82"
+embedded-can = "0.4.1"
+socketcan = "3.3.0"
 
 [build-dependencies]
 cbindgen = "0.24.3"
@@ -14,3 +17,7 @@ cbindgen = "0.24.3"
 name = "gm6020_can"
 path = "src/gm6020_can.rs"
 crate-type = ["staticlib"]
+
+[[bin]]
+name = "gm6020_can_test"
+path = "src/gm6020_can_test.rs"
