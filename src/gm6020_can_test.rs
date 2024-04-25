@@ -1,6 +1,8 @@
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use embedded_can::{blocking::Can, Frame as EmbeddedFrame, StandardId};
 use socketcan::{CanFrame, CanSocket, Socket};
+use std::thread;
+use std::time::{SystemTime};
 
 const FB_ID_BASE: u16 = 0x204;
 const CMD_ID_V_L: u16 = 0x1ff;
@@ -16,68 +18,77 @@ const I_MAX      : f64 =   1.62;
 const RPM_PER_N_M: f64 = 156.0;
 const TEMP_MAX   : f64 = 125.0; // C
 
+#[derive(Default, Copy, Clone)]
+pub enum CmdMode { #[default] Voltage, Current }
+#[derive(Default)]
+enum IdRange { #[default] Low, High }
+
+#[derive(Default)]
 struct Feedback {
+    timestamp: Option<SystemTime>,
     position: u16, // [0, 8191]
     speed: i16,    // rpm
     current: i16,  // [-16384, 16384]:[-3A, 3A]
     temp: u8,      // TODO units
 }
+#[derive(Default)]
 struct Command {
-    voltage: i16,
-    current: i16,
+    mode: CmdMode,
+    cmd: i16,
 }
-
+#[derive(Default)]
 pub struct Gm6020Can {
-    socket: CanSocket,
+    socket: Option<CanSocket>,
     feedbacks: [Feedback; (ID_MAX-ID_MIN+1) as usize],
     commands: [Command; (ID_MAX-ID_MIN+1)as usize],
 }
 
 impl Gm6020Can {
-    pub fn init(&mut self, interface: String) -> anyhow::Result<()> {
-        self.socket = CanSocket::open(&interface)
-            .with_context(|| format!("Failed to open socket on interface {}", interface))?;
+    pub fn init(&mut self, interface: &str) -> anyhow::Result<()> {
+        self.socket = Some(CanSocket::open(&interface)
+            .with_context(|| format!("Failed to open socket on interface {}", interface))?);
 
     //    let frame = sock.receive().context("Receiving frame")?;
 
     //    println!("{}  {}", iface, frame_to_string(&frame));
-
+        // TODO set filter for feedback IDs and set async subscriber to update feedbacks array
         Ok(())
     }
 
-    pub fn cmd_voltage_single(&mut self, id: u8, voltage: i16) -> anyhow::Result<()> {
-        if id<ID_MIN || id>ID_MAX { return Err(()); }
-
-        self.commands[id-1].voltage = voltage;
-        let id_range: u8 = (id > 4) as u8;
-        self.tx_cmd_voltages(id_range).context("transmitting voltage commands")?;
-        Ok();
+    pub fn cmd_single(&mut self, id: u8, mode: CmdMode, cmd: i16) -> anyhow::Result<()> {
+        if id<ID_MIN || id>ID_MAX { return Err(anyhow!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id)); }
+        self.commands[(id-1) as usize].mode = mode;
+        self.commands[(id-1) as usize].cmd = cmd;
+        self.tx_cmd(match id > 4 {false=>IdRange::Low, true=>IdRange::High}, mode).context("transmitting commands")?;
+        Ok(())
     }
 
-    // TODO input types
-    pub fn cmd_voltage_multiple(&mut self, commands: Vec<(u8, i16)> ) -> anyhow::Result<()> {
+    pub fn cmd_multiple(&mut self, mode: CmdMode, commands: Vec<(u8, i16)> ) -> anyhow::Result<()> {
         let mut send_low: bool = false;
         let mut send_high: bool = false;
-        //TODO for loop
         for cmd in commands.into_iter(){
             send_low |= cmd.0<=4;    
             send_high |= cmd.0>4;
-            self.commands[cmd.id-1].voltage = cmd.1;
+            self.commands[(cmd.0-1) as usize].mode = mode;
+            self.commands[(cmd.0-1) as usize].cmd = cmd.1;
         }
-        if send_low { self.tx_cmd_voltages(0_u8).context("transmitting voltage commands")?; }
-        if send_high { self.tx_cmd_voltages(1_u8).context("transmitting voltage commands")?; }
+        if send_low { self.tx_cmd(IdRange::Low, mode).context("transmitting commands")?; }
+        if send_high { self.tx_cmd(IdRange::High, mode).context("transmitting commands")?; }
         Ok(())
     }
 
 
     // Send multiple voltages at once for more efficient communication
-    fn tx_cmd_voltages(&mut self, id_range: u8) -> anyhow::Result<()> {
-        let id: u16 = match id_range { 0 => CMD_ID_V_L, 1 => CMD_ID_V_H };
+    fn tx_cmd(&mut self, id_range: IdRange, mode: CmdMode) -> anyhow::Result<()> {
+        let id: u16 = match id_range { IdRange::Low => CMD_ID_V_L, IdRange::High => CMD_ID_V_H };
         // TODO check temp before sending - put warning output when maxed
         let frame = CanFrame::new(StandardId::new(0x1f1).unwrap(), &[1, 2, 3, 4])
             .context("Creating CAN frame")?;
 
-        self.socket.transmit(&frame).context("Transmitting frame")?;
+        match &mut self.socket{
+            Some(sock) => sock.transmit(&frame).context("Transmitting frame")?,
+            None => return Err(anyhow!("Socket not initialized")),
+        }
     /*
       CAN_TxHeaderTypeDef tx_header;
       uint8_t             tx_data[8];
@@ -101,59 +112,9 @@ impl Gm6020Can {
         Ok(())
     }
 
-}
-
-
-fn main() -> anyhow::Result<()> {
-
-    Ok(())
-}
-
-
-
-
-
-
-
-
-
+    fn rx_fb(&mut self, frame: CanFrame) -> anyhow::Result<()> {
+        let stamp = SystemTime::now(); // TODO waiting on socketcan library to implement hardware timestamps
 /*
-moto_info_t motor_info[MOTOR_MAX_NUM];
-
-*
-  * @brief  init can filter, start can, enable can rx interrupt
-  * @param  hcan pointer to a CAN_HandleTypeDef structure that contains
-  *         the configuration information for the specified CAN.
-  * @retval None
-  
-void can_user_init(CAN_HandleTypeDef* hcan )
-{
-  CAN_FilterTypeDef  can_filter;
-
-  can_filter.FilterBank = 0;                       // filter 0
-  can_filter.FilterMode =  CAN_FILTERMODE_IDMASK;  // mask mode
-  can_filter.FilterScale = CAN_FILTERSCALE_32BIT;
-  can_filter.FilterIdHigh = 0;
-  can_filter.FilterIdLow  = 0;
-  can_filter.FilterMaskIdHigh = 0;
-  can_filter.FilterMaskIdLow  = 0;                // set mask 0 to receive all can id
-  can_filter.FilterFIFOAssignment = CAN_RX_FIFO0; // assign to fifo0
-  can_filter.FilterActivation = ENABLE;           // enable can filter
-  can_filter.SlaveStartFilterBank  = 14;          // only meaningful in dual can mode
-   
-  HAL_CAN_ConfigFilter(hcan, &can_filter);        // init can filter
-  HAL_CAN_Start(&hcan1);                          // start can1
-  HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING); // enable can1 rx interrupt
-}
-
-**
-  * @brief  can rx callback, get motor feedback info
-  * @param  hcan pointer to a CAN_HandleTypeDef structure that contains
-  *         the configuration information for the specified CAN.
-  * @retval None
-  
-void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
-{
   CAN_RxHeaderTypeDef rx_header;
   uint8_t             rx_data[8];
   if(hcan->Instance == CAN1)
@@ -169,6 +130,31 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     motor_info[index].torque_current = ((rx_data[4] << 8) | rx_data[5]);
     motor_info[index].temp           =   rx_data[6];
   }
+*/
+
+        let id: u8 = 1;
+        let f: &mut Feedback = &mut self.feedbacks[(id-1) as usize];
+        f.timestamp = Some(stamp);
+        Ok(())
+    }
 }
 
-*/
+
+fn main() -> anyhow::Result<()> {
+
+    let delay = std::time::Duration::from_secs(1);
+
+    let mut gmc = Gm6020Can::default();
+    gmc.cmd_single(1, CmdMode::Voltage, 5_i16)?;
+    thread::sleep(delay);
+    gmc.cmd_single(1, CmdMode::Voltage, 0_i16)?;
+    thread::sleep(delay);
+    gmc.cmd_single(1, CmdMode::Voltage, -5_i16)?;
+    thread::sleep(delay);
+    gmc.cmd_single(1, CmdMode::Voltage, 0_i16)?;
+    
+
+    Ok(())
+}
+
+
