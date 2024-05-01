@@ -1,5 +1,6 @@
 use embedded_can::{Frame as EmbeddedFrame, StandardId};
 use socketcan::{CanDataFrame, CanFilter, CanFrame, CanSocket, Frame, Socket, SocketOptions};
+use core::slice;
 use std::ptr::null;
 use std::time::SystemTime;
 use std::ffi::CStr;
@@ -48,53 +49,52 @@ pub struct Gm6020Can {
 
 // TODO change return types on external functions
 // TODO return Option in init()
-// TODO print to stderr within these functions?
-
-/*#[no_mangle]
-pub extern "C" fn init(interface: *const c_char) -> *Gm6020Can{
-    if !c_string.is_null() {
-        unsafe {
-            // Convert the raw pointer to a CStr
-            let c_str = CStr::from_ptr(c_string);
-
-            // Convert the CStr to a &str
-            if let Ok(rust_str) = c_str.to_str() {
-                // Process the C-string as a Rust string
-            } else {
-                eprintln!("Invalid c-string received for interface name");
-                return null();
-            }
-        }
-    } else {
-        println!("Invalid c-string received for interface name (null pointer)");
-        return null();
-    }
-    /*let inter = interface.into_string();
-    match _init(inter) {
-        Ok(handle) => return handle;
-
-    }*/
-    return Gm6020Can::default();
-}
-fn _init
-*/
+// TODO split implementation and C wrapper into separate files
 
 #[no_mangle]
-pub extern "C" fn init(interface: &str) -> Result<Gm6020Can, String> {
-    let mut gm6020_can = Gm6020Can::default();
-    gm6020_can.socket = Some(CanSocket::open(&interface).map_err(|err| err.to_string())?);
+pub extern "C" fn init(interface: *const c_char) -> *mut Gm6020Can{
+    let inter: &str;
+    if interface.is_null() {
+        println!("Invalid c-string received for interface name (null pointer)");
+        return null::<Gm6020Can>() as *mut Gm6020Can;
+    }
+    else {
+        unsafe {
+            let r = CStr::from_ptr(interface).to_str();
+            if r.is_err() {
+                eprintln!("Invalid c-string received for interface name");
+                return null::<Gm6020Can>() as *mut Gm6020Can;
+            }
+            inter = r.unwrap();
+        }
+    }
+    _init(inter).map_or_else(|e| {eprintln!("{}", e); null::<Gm6020Can>() as *mut Gm6020Can}, |v| Box::into_raw(v) as *mut Gm6020Can)
+}
+fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
+    let mut gm6020_can: Box<Gm6020Can> = Box::new(Gm6020Can::default()); // TODO technically a memory leak - also make sure socket is closed
+    gm6020_can.as_mut().socket = Some(CanSocket::open(&interface).map_err(|err| err.to_string())?);
 
-//    let frame = sock.receive().context("Receiving frame")?;
-
-//    println!("{}  {}", iface, frame_to_string(&frame));
-    // TODO set filter for feedback IDs and set async subscriber to update feedbacks array
+    // TODO set subscriber to update feedbacks array
+    // let frame = sock.receive()?;
     let filter = CanFilter::new(FB_ID_BASE as u32, 0xffffffff - 0xf);
-    gm6020_can.socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?;
+    gm6020_can.as_ref().socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?; // TODO why does this not need to be mutable? Is it acutally working on the socket or returning a copy?
     return Ok(gm6020_can);
 }
+
 // TODO break into separate thread for receiving
 #[no_mangle]
-pub extern "C" fn run(gm6020_can: &mut Gm6020Can) {
+pub extern "C" fn run(gm6020_can: *mut Gm6020Can) -> i8{
+    let handle: &mut Gm6020Can;
+    if gm6020_can.is_null(){
+        println!("Invalid handle (null pointer)");
+        return -1;
+    }
+    else{
+        handle = unsafe{&mut *gm6020_can};
+    }
+    _run(handle).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
+}
+fn _run(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
     loop {
         match gm6020_can.socket.as_ref().unwrap().read_frame() {
             Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
@@ -122,7 +122,18 @@ fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Resul
 
 
 #[no_mangle]
-pub extern "C" fn cmd_single(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Result<(), String> {
+pub extern "C" fn cmd_single(gm6020_can: *mut Gm6020Can, mode: CmdMode, id: u8, cmd: f64) -> i8{
+    let handle: &mut Gm6020Can;
+    if gm6020_can.is_null(){
+        println!("Invalid handle (null pointer)");
+        return -1;
+    }
+    else{
+        handle = unsafe{&mut *gm6020_can};
+    }
+    _cmd_single(handle, mode, id, cmd).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
+}
+fn _cmd_single(gm6020_can: &mut Gm6020Can, mode: CmdMode, id: u8, cmd: f64) -> Result<(), String> {
     if id<ID_MIN || id>ID_MAX { return Err(format!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id)); }
     set_cmd(gm6020_can, id, mode, cmd)?;
     tx_cmd(gm6020_can, match id > 4 {false=>IdRange::Low, true=>IdRange::High}, mode)?;
@@ -130,7 +141,24 @@ pub extern "C" fn cmd_single(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, 
 }
 
 #[no_mangle]
-pub extern "C" fn cmd_multiple(gm6020_can: &mut Gm6020Can, mode: CmdMode, cmds: Vec<(u8, f64)> ) -> Result<(), String> {
+pub extern "C" fn cmd_multiple(gm6020_can: *mut Gm6020Can, mode: CmdMode, cmds: *const *const f64, len: u8) -> i8{
+    let handle: &mut Gm6020Can;
+    let cmds2: &[&[f64]]; // TODO better naming
+    if gm6020_can.is_null() || cmds.is_null(){
+        println!("Invalid handle or commands (null pointer)");
+        return -1;
+    }
+    else{
+        handle = unsafe{&mut *gm6020_can};
+        cmds2 = unsafe {slice::from_raw_parts(cmds as *const &[f64], len as usize)} // TODO how can we assert valid data for this?
+    }
+    let mut cmds3: Vec<(u8, f64)> = Vec::new();
+    for i in 0..(len as usize) {
+        cmds3.push((cmds2[i][0 as usize] as u8, cmds2[i][1 as usize]));
+    }
+    _cmd_multiple(handle, mode, cmds3).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
+}
+fn _cmd_multiple(gm6020_can: &mut Gm6020Can, mode: CmdMode, cmds: Vec<(u8, f64)> ) -> Result<(), String> {
     let mut send_low: bool = false;
     let mut send_high: bool = false;
     for cmd in cmds.into_iter(){
@@ -181,10 +209,11 @@ fn rx_fb(gm6020_can: &mut Gm6020Can, frame: CanDataFrame){
     let f: &mut (Option<SystemTime>, Feedback) = &mut gm6020_can.feedbacks[idx];
     let d: &[u8] = &frame.data()[0..8];
     f.0 = Some(SystemTime::now());// TODO waiting on socketcan library to implement hardware timestamps
-    f.1.position    = (d[0] as u16) << 8 | d[1] as u16; // TODO can we set byte alignment of Feedback so this can be read in directly? Might need to check endian-ness
+    f.1.position    = (d[0] as u16) << 8 | d[1] as u16;
     f.1.speed       = (d[2] as i16) << 8 | d[3] as i16;
     f.1.current     = (d[4] as i16) << 8 | d[5] as i16;
     f.1.temperature = d[6] as u16;
+    // Apparently this is frowned-upon but it looks a lot cooler
     //unsafe {
     //    f.1 = std::mem::transmute::<[u8; 8], Feedback>(frame.data()[0..8].try_into().unwrap());
     //}
