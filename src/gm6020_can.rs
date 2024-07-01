@@ -47,9 +47,8 @@ pub struct Gm6020Can {
 }
 
 
-// TODO change return types on external functions
-// TODO return Option in init()
 // TODO split implementation and C wrapper into separate files
+// TODO need rwlock on gm6020can.feedbacks
 
 #[no_mangle]
 pub extern "C" fn init(interface: *const c_char) -> *mut Gm6020Can{
@@ -73,9 +72,6 @@ pub extern "C" fn init(interface: *const c_char) -> *mut Gm6020Can{
 fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
     let mut gm6020_can: Box<Gm6020Can> = Box::new(Gm6020Can::default()); // TODO technically a memory leak - also make sure socket is closed
     gm6020_can.as_mut().socket = Some(CanSocket::open(&interface).map_err(|err| err.to_string())?);
-
-    // TODO set subscriber to update feedbacks array
-    // let frame = sock.receive()?;
     let filter = CanFilter::new(FB_ID_BASE as u32, 0xffffffff - 0xf);
     gm6020_can.as_ref().socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?; // TODO why does this not need to be mutable? Is it acutally working on the socket or returning a copy?
     return Ok(gm6020_can);
@@ -96,13 +92,29 @@ pub extern "C" fn run(gm6020_can: *mut Gm6020Can) -> i8{
 }
 fn _run(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
     loop {
-        match gm6020_can.socket.as_ref().unwrap().read_frame() {
-            Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
-            Ok(CanFrame::Remote(frame)) => println!("{:?}", frame),
-            Ok(CanFrame::Error(frame)) => println!("{:?}", frame),
-            Err(err) => eprintln!("{}", err),
-        }
+        _run_once(gm6020_can)?;
     }
+}
+#[no_mangle]
+pub extern "C" fn run_once(gm6020_can: *mut Gm6020Can) -> i8{
+    let handle: &mut Gm6020Can;
+    if gm6020_can.is_null(){
+        println!("Invalid handle (null pointer)");
+        return -1;
+    }
+    else{
+        handle = unsafe{&mut *gm6020_can};
+    }
+    _run_once(handle).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
+}
+fn _run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
+    match gm6020_can.socket.as_ref().unwrap().read_frame() {
+        Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
+        Ok(CanFrame::Remote(frame)) => println!("{:?}", frame),
+        Ok(CanFrame::Error(frame)) => println!("{:?}", frame),
+        Err(err) => eprintln!("{}", err),
+    };
+    Ok(())
 }
 
 fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Result<(), String> {
@@ -176,10 +188,9 @@ fn _cmd_multiple(gm6020_can: &mut Gm6020Can, mode: CmdMode, cmds: Vec<(u8, f64)>
 }
 
 fn tx_cmd(gm6020_can: &mut Gm6020Can, id_range: IdRange, mode: CmdMode) -> Result<(), String> {
-
     for (i, fb) in (&gm6020_can.feedbacks[((id_range as u8) * 4) as usize .. (4 + (id_range as u8)*4) as usize]).iter().enumerate() {
-        if gm6020_can.commands[i] != 0 && fb.0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded", i))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 10 {
-            return Err(format!("Motor {} not responding", i));
+        if gm6020_can.commands[i] != 0 && fb.0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded. Did you enter the `run` loop?", i+ID_MIN))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 10 {
+            return Err(format!("Motor {} not responding. Did you enter the `run` loop?", i+ID_MIN));
         }
     }
 

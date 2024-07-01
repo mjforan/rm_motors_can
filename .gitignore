@@ -37,3 +37,6 @@ target/
 include/
 Cargo.lock
 main
+
+.vscode
+
