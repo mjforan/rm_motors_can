@@ -14,13 +14,13 @@ const CMD_ID_V_L: u16 = 0x1ff;
 const CMD_ID_V_H: u16 = 0x2ff;
 const CMD_ID_I_L: u16 = 0x1fe;
 const CMD_ID_I_H: u16 = 0x2fe;
-const ID_MIN: u8 = 1;
-const ID_MAX: u8 = 7;
+pub const ID_MIN: u8 = 1;
+pub const ID_MAX: u8 = 7;
 
 const RPM_PER_V  : f64 =  13.33;
 const N_PER_A    : f64 = 741.0;
-const V_MAX      : f64 =  24.0;
-const I_MAX      : f64 =   1.62;
+pub const V_MAX  : f64 =  24.0;
+pub const I_MAX  : f64 =   1.62;
 const V_CMD_MAX : f64 = 25000.0;
 const I_CMD_MAX : f64 = 16384.0;
 const TEMP_MAX   : u8  = 125; // C
@@ -28,12 +28,15 @@ const TEMP_MAX   : u8  = 125; // C
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub enum CmdMode { Voltage, Current, Torque, Speed }
-#[derive(Copy, Clone)]
+impl Default for CmdMode {
+    fn default() -> Self { CmdMode::Voltage }
+}
+#[derive(Copy, Clone, Debug)]
 #[repr(C)]
 enum IdRange { Low, High }
-#[derive(Default)]
-#[repr(C)]
 
+#[derive(Default, Debug)]
+#[repr(C)]
 struct Feedback {
     position:    u16, // [0, 8191]
     speed:       i16, // rpm
@@ -45,13 +48,14 @@ struct Feedback {
 #[repr(C)]
 pub struct Gm6020Can {
     socket: Option<CanSocket>,
-    feedbacks: [(Option<SystemTime>, Feedback); (ID_MAX-ID_MIN+1) as usize],
+    feedbacks: [(Option<SystemTime>, Feedback); 8], // (ID_MAX-ID_MIN+1) as usize   only 7 slots will be used but 8 is convenient for tx_cmd
+    mode: CmdMode,
     commands: [i16; 8], // only 7 slots will be used but 8 is convenient for tx_cmd
 }
 
 
 // TODO split implementation and C wrapper into separate files
-// TODO need rwlock on gm6020can.feedbacks
+// TODO handle CAN no buffer left
 
 #[no_mangle]
 pub extern "C" fn init(interface: *const c_char) -> *mut Gm6020Can{
@@ -75,11 +79,10 @@ pub extern "C" fn init(interface: *const c_char) -> *mut Gm6020Can{
 fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
     let mut gm6020_can: Box<Gm6020Can> = Box::new(Gm6020Can::default()); // TODO technically a memory leak - also make sure socket is closed
     gm6020_can.as_mut().socket = Some(CanSocket::open(&interface).map_err(|err| err.to_string())?);
-    let filter = CanFilter::new(FB_ID_BASE as u32, 0xffffffff - 0xf);
+    let filter = CanFilter::new(FB_ID_BASE as u32, 0xffff - 0xf); // Only accept messages with IDs from 0x200 to 0x20F (Motor feedbacks are 0x205 to 0x20B)
     gm6020_can.as_ref().socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?;
     return Ok(gm6020_can);
 }
-
 #[no_mangle]
 pub extern "C" fn run(gm6020_can: *mut Gm6020Can, period: u64) -> i8{
     let handle: &mut Gm6020Can;
@@ -90,6 +93,7 @@ pub extern "C" fn run(gm6020_can: *mut Gm6020Can, period: u64) -> i8{
     else{
         handle = unsafe{&mut *gm6020_can};
     }
+    // TODO Can we /should we use an async library instead
     thread::spawn( move || _run(handle, period).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8));
     return 0;
 }
@@ -112,37 +116,14 @@ pub extern "C" fn run_once(gm6020_can: *mut Gm6020Can) -> i8{
     _run_once(handle).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
 }
 fn _run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
-    match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(10)) {
+    match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(2)) { // Feedbacks sent at 1kHz, use 2ms for slight leeway
         Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
-        Ok(CanFrame::Remote(frame)) => println!("CanRemoteFrame: {:?}", frame),
-        Ok(CanFrame::Error(frame)) => println!("CanErrorFrame: {:?}", frame),
+        Ok(CanFrame::Remote(frame)) => eprintln!("{:?}", frame),
+        Ok(CanFrame::Error(frame)) => eprintln!("{:?}", frame),
         Err(err) => eprintln!("{}", err),
     };
 
-    // TODO check which ones actually need to be sent
-/*
-    let mut send_low: bool = false;
-    let mut send_high: bool = false;
-    for cmd in cmds.into_iter(){
-        send_low |= cmd.0<=4;    
-        send_high |= cmd.0>4;
-        set_cmd(gm6020_can, cmd.0, mode, cmd.1)?;
-    }
-
-    match (send_low, send_high) {
-        (false, false) => Err("Not sending any command".to_string()),
-        (true,  false) => tx_cmd(gm6020_can, IdRange::Low, mode),
-        (false, true)  => tx_cmd(gm6020_can, IdRange::High, mode),
-        (true,  true)  => tx_cmd(gm6020_can, IdRange::Low, mode).and_then(|_| tx_cmd(gm6020_can, IdRange::Low, mode))
-    }
-
-    */
-    for mode in [CmdMode::Voltage, CmdMode::Current]{
-        for range in [IdRange::Low, IdRange::High]{
-            tx_cmd(gm6020_can, range, mode)?;
-        }
-    }
-    Ok(())
+    tx_cmd(gm6020_can, IdRange::Low).and_then(|_| tx_cmd(gm6020_can, IdRange::High))
 }
 
 fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Result<(), String> {
@@ -152,6 +133,12 @@ fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Resul
     if mode == CmdMode::Speed  {return set_cmd(gm6020_can, id, CmdMode::Voltage, cmd/RPM_PER_V);}
     if mode == CmdMode::Voltage && cmd.abs() > V_MAX { return Err(format!("voltage out of range [{}, {}]: {}", -1.0*V_MAX, V_MAX, cmd));}
     if mode == CmdMode::Current && cmd.abs() > I_MAX { return Err(format!("current out of range [{}, {}]: {}", -1.0*I_MAX, I_MAX, cmd));}
+    if mode != gm6020_can.mode {
+        println!("Warning: changing command mode affects all motors on this bus.");
+        for i in 0..(ID_MAX-ID_MIN)as usize{
+            gm6020_can.commands[i] = 0;
+        }
+    }
     gm6020_can.commands[idx] = match mode {
         CmdMode::Voltage => (V_CMD_MAX/V_MAX*cmd) as i16,
         CmdMode::Current => (I_CMD_MAX/I_MAX*cmd) as i16,
@@ -204,16 +191,15 @@ fn _cmd_multiple(gm6020_can: &mut Gm6020Can, mode: CmdMode, cmds: Vec<(u8, f64)>
     Ok(())
 }
 
-fn tx_cmd(gm6020_can: &mut Gm6020Can, id_range: IdRange, mode: CmdMode) -> Result<(), String> {
-    // ToDo commented for testing
-    /*
+fn tx_cmd(gm6020_can: &mut Gm6020Can, id_range: IdRange) -> Result<(), String> {
+    // TODO change this to a warning, don't panic
     for (i, fb) in (&gm6020_can.feedbacks[((id_range as u8) * 4) as usize .. (4 + (id_range as u8)*4) as usize]).iter().enumerate() {
-        if gm6020_can.commands[i] != 0 && fb.0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded. Did you enter the `run` loop?", (i as u8)+ID_MIN))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 10 {
+        if gm6020_can.commands[(i as u8 + (id_range as u8)*4) as usize] != 0 && fb.0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded. Did you enter the `run` loop?", (i as u8)+ID_MIN))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 10 {
             return Err(format!("Motor {} not responding. Did you enter the `run` loop?", (i as u8)+ID_MIN));
         }
-    }*/
+    }
 
-    let id: u16 = match (id_range, mode) {
+    let id: u16 = match (id_range, gm6020_can.mode) {
         (IdRange::Low,  CmdMode::Voltage) => CMD_ID_V_L,
         (IdRange::High, CmdMode::Voltage) => CMD_ID_V_H,
         (IdRange::Low,  CmdMode::Current) => CMD_ID_I_L,
@@ -231,7 +217,6 @@ fn tx_cmd(gm6020_can: &mut Gm6020Can, id_range: IdRange, mode: CmdMode) -> Resul
 }
 
 fn rx_fb(gm6020_can: &mut Gm6020Can, frame: CanDataFrame){
-    println!("{:?}", frame);
     let rxid: u16 = frame.raw_id() as u16;
     let id: u8 = (rxid-FB_ID_BASE)as u8;
     if id<ID_MIN || id>ID_MAX {return;}
