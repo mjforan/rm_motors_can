@@ -1,3 +1,5 @@
+use std::f64::consts::PI;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use embedded_can::{Frame as EmbeddedFrame, StandardId};
 use socketcan::{CanDataFrame, CanFilter, CanFrame, CanSocket, Frame, Socket, SocketOptions};
@@ -6,7 +8,8 @@ use std::ptr::null;
 use std::time::SystemTime;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::thread;
+use std::thread::{self, JoinHandle};
+use std::sync::Arc;
 
 
 const FB_ID_BASE: u16 = 0x204;
@@ -16,11 +19,14 @@ const CMD_ID_I_L: u16 = 0x1fe;
 const CMD_ID_I_H: u16 = 0x2fe;
 pub const ID_MIN: u8 = 1;
 pub const ID_MAX: u8 = 7;
+const POS_MAX   : u16 = 8191;
+
 
 const RPM_PER_V  : f64 =  13.33;
 const N_PER_A    : f64 = 741.0;
 pub const V_MAX  : f64 =  24.0;
 pub const I_MAX  : f64 =   1.62;
+const I_FB_MAX   : f64 =   3.0;
 const V_CMD_MAX : f64 = 25000.0;
 const I_CMD_MAX : f64 = 16384.0;
 const TEMP_MAX   : u8  = 125; // C
@@ -31,6 +37,15 @@ pub enum CmdMode { Voltage, Current, Torque, Speed }
 impl Default for CmdMode {
     fn default() -> Self { CmdMode::Voltage }
 }
+
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+#[repr(C)]
+pub enum FbField { Position, Speed, Current, Temperature }
+impl Default for FbField {
+    fn default() -> Self { FbField::Position }
+}
+
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 enum IdRange { Low, High }
@@ -116,7 +131,7 @@ pub extern "C" fn run_once(gm6020_can: *mut Gm6020Can) -> i8{
     _run_once(handle).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
 }
 fn _run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
-    match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(2)) { // Feedbacks sent at 1kHz, use 2ms for slight leeway
+    match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(2)) { // Feedbacks sent at 1kHz, use 2ms for slight leeway // TODO why does this still sometimes timeout?
         Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
         Ok(CanFrame::Remote(frame)) => eprintln!("{:?}", frame),
         Ok(CanFrame::Error(frame)) => eprintln!("{:?}", frame),
@@ -233,4 +248,47 @@ fn rx_fb(gm6020_can: &mut Gm6020Can, frame: CanDataFrame){
     //    f.1 = std::mem::transmute::<[u8; 8], Feedback>(frame.data()[0..8].try_into().unwrap());
     //}
     //f.1.temperature = f.1.temperature >> 8; // TODO check endianness
+}
+
+#[no_mangle]
+pub extern "C" fn get(gm6020_can: *mut Gm6020Can, id: u8, field: FbField) -> f64{
+    if id<ID_MIN || id>ID_MAX { eprintln!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id); panic!();}
+    let handle: &mut Gm6020Can;
+    if gm6020_can.is_null(){
+        println!("Invalid handle");
+        panic!();
+    }
+    else{
+        handle = unsafe{&mut *gm6020_can};
+    }
+    match field {
+        FbField::Position    => handle.feedbacks[(id-1)as usize].1.position as f64/POS_MAX as f64 *2f64*PI,
+        FbField::Speed       => handle.feedbacks[(id-1)as usize].1.speed as f64,
+        FbField::Current     => handle.feedbacks[(id-1)as usize].1.current as f64 / 1000f64,
+        FbField::Temperature => handle.feedbacks[(id-1)as usize].1.temperature as f64,
+    }
+}
+
+
+pub fn debug_thread(gm6020_can: *mut Gm6020Can, id: u8, field: FbField, stop: Arc<AtomicBool>) -> JoinHandle<()>{
+    let handle: &mut Gm6020Can;
+    if gm6020_can.is_null(){
+        println!("Invalid handle (null pointer)");
+        panic!();
+    }
+    else{
+        handle = unsafe{&mut *gm6020_can};
+    }
+    thread::spawn( move ||
+        while ! stop.load(Ordering::Relaxed){
+            thread::sleep(std::time::Duration::from_millis(50));
+            let val = get(handle, id, field);
+            print!("{}\t", val);
+            match field {
+                FbField::Current => println!("{:#<1$}", "", (val.abs()/I_FB_MAX*20f64) as usize),
+                FbField::Temperature => println!("{:#<1$}", "", val as usize),
+                _ => println!("")
+            }
+        }
+    )
 }
