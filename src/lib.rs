@@ -76,13 +76,10 @@ fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
     let mut gm6020_can: Box<Gm6020Can> = Box::new(Gm6020Can::default()); // TODO technically a memory leak - also make sure socket is closed
     gm6020_can.as_mut().socket = Some(CanSocket::open(&interface).map_err(|err| err.to_string())?);
     let filter = CanFilter::new(FB_ID_BASE as u32, 0xffffffff - 0xf);
-    //let filter = CanFilter::new(517 as u32, 0xffffffff);
     gm6020_can.as_ref().socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?;
     return Ok(gm6020_can);
-    
 }
 
-// TODO break into separate thread for receiving
 #[no_mangle]
 pub extern "C" fn run(gm6020_can: *mut Gm6020Can, period: u64) -> i8{
     let handle: &mut Gm6020Can;
@@ -93,9 +90,8 @@ pub extern "C" fn run(gm6020_can: *mut Gm6020Can, period: u64) -> i8{
     else{
         handle = unsafe{&mut *gm6020_can};
     }
-    let handle = thread::spawn( move || _run(handle, period).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8));
-    8
-    
+    thread::spawn( move || _run(handle, period).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8));
+    return 0;
 }
 fn _run(gm6020_can: &mut Gm6020Can, period: u64) -> Result<(), String>{
     loop {
@@ -122,12 +118,7 @@ fn _run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
         Ok(CanFrame::Error(frame)) => println!("CanErrorFrame: {:?}", frame),
         Err(err) => eprintln!("{}", err),
     };
-    match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(10)) {
-        Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
-        Ok(CanFrame::Remote(frame)) => println!("CanRemoteFrame: {:?}", frame),
-        Ok(CanFrame::Error(frame)) => println!("CanErrorFrame: {:?}", frame),
-        Err(err) => eprintln!("{}", err),
-    };
+
     // TODO check which ones actually need to be sent
 /*
     let mut send_low: bool = false;
@@ -235,7 +226,6 @@ fn tx_cmd(gm6020_can: &mut Gm6020Can, id_range: IdRange, mode: CmdMode) -> Resul
         StandardId::new(id).unwrap(),
         &[(cmds[0]>>8) as u8, cmds[0] as u8, (cmds[1]>>8) as u8, cmds[1] as u8, (cmds[2]>>8) as u8, cmds[2] as u8, (cmds[3]>>8) as u8, cmds[3] as u8])
         .ok_or_else(|| Err::<CanFrame, String>("Failed to open socket".to_string())).unwrap();
-    println!("transmitting frame: {:?}", frame);
     gm6020_can.socket.as_ref().ok_or_else(|| Err::<CanSocket, String>("Socket not initialized".to_string())).unwrap().write_frame(&frame).map_err(|err| err.to_string())?;
     Ok(())
 }
