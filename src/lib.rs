@@ -33,7 +33,7 @@ const TEMP_MAX   : u8  = 125; // C
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[repr(C)]
-pub enum CmdMode { Voltage, Current, Torque, Speed }
+pub enum CmdMode { Voltage, Current, Torque, Velocity }
 impl Default for CmdMode {
     fn default() -> Self { CmdMode::Voltage }
 }
@@ -41,7 +41,7 @@ impl Default for CmdMode {
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[repr(C)]
-pub enum FbField { Position, Speed, Current, Temperature }
+pub enum FbField { Position, Velocity, Current, Temperature }
 impl Default for FbField {
     fn default() -> Self { FbField::Position }
 }
@@ -54,7 +54,7 @@ enum IdRange { Low, High }
 #[repr(C)]
 struct Feedback {
     position:    u16, // [0, 8191]
-    speed:       i16, // rpm
+    velocity:    i16, // rpm
     current:     i16, // [-16384, 16384]:[-3A, 3A]
     temperature: u16,  // TODO units
 }
@@ -98,8 +98,10 @@ fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
     gm6020_can.as_ref().socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?;
     return Ok(gm6020_can);
 }
+
+// Below 100Hz the feedback values get weird - CAN buffer filling up?
 #[no_mangle]
-pub extern "C" fn run(gm6020_can: *mut Gm6020Can, period: u64) -> i8{
+pub extern "C" fn run(gm6020_can: *mut Gm6020Can, period_ms: u64) -> i8{
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
         println!("Invalid handle (null pointer)");
@@ -109,13 +111,13 @@ pub extern "C" fn run(gm6020_can: *mut Gm6020Can, period: u64) -> i8{
         handle = unsafe{&mut *gm6020_can};
     }
     // TODO Can we /should we use an async library instead
-    thread::spawn( move || _run(handle, period).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8));
+    thread::spawn( move || _run(handle, period_ms).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8));
     return 0;
 }
-fn _run(gm6020_can: &mut Gm6020Can, period: u64) -> Result<(), String>{
+fn _run(gm6020_can: &mut Gm6020Can, period_ms: u64) -> Result<(), String>{
     loop {
         _run_once(gm6020_can)?;
-        thread::sleep(std::time::Duration::from_secs(period));
+        thread::sleep(std::time::Duration::from_millis(period_ms));
     }
 }
 #[no_mangle]
@@ -131,7 +133,7 @@ pub extern "C" fn run_once(gm6020_can: *mut Gm6020Can) -> i8{
     _run_once(handle).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
 }
 fn _run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
-    match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(2)) { // Feedbacks sent at 1kHz, use 2ms for slight leeway // TODO why does this still sometimes timeout?
+    match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(2)) { // Feedbacks sent at 1kHz, use 2ms for slight leeway
         Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
         Ok(CanFrame::Remote(frame)) => eprintln!("{:?}", frame),
         Ok(CanFrame::Error(frame)) => eprintln!("{:?}", frame),
@@ -145,7 +147,7 @@ fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Resul
     let idx = (id-1) as usize;
     if gm6020_can.feedbacks[idx].1.temperature >= TEMP_MAX as u16 { gm6020_can.commands[idx] = 0; return Err(format!("temperature overload [{}]: {}", TEMP_MAX, gm6020_can.feedbacks[idx].1.temperature));}
     if mode == CmdMode::Torque {return set_cmd(gm6020_can, id, CmdMode::Current, cmd/N_PER_A);}
-    if mode == CmdMode::Speed  {return set_cmd(gm6020_can, id, CmdMode::Voltage, cmd/RPM_PER_V);}
+    if mode == CmdMode::Velocity  {return set_cmd(gm6020_can, id, CmdMode::Voltage, cmd/RPM_PER_V);}
     if mode == CmdMode::Voltage && cmd.abs() > V_MAX { return Err(format!("voltage out of range [{}, {}]: {}", -1.0*V_MAX, V_MAX, cmd));}
     if mode == CmdMode::Current && cmd.abs() > I_MAX { return Err(format!("current out of range [{}, {}]: {}", -1.0*I_MAX, I_MAX, cmd));}
     if mode != gm6020_can.mode {
@@ -240,7 +242,7 @@ fn rx_fb(gm6020_can: &mut Gm6020Can, frame: CanDataFrame){
     let d: &[u8] = &frame.data()[0..8];
     f.0 = Some(SystemTime::now());// TODO waiting on socketcan library to implement hardware timestamps
     f.1.position    = (d[0] as u16) << 8 | d[1] as u16;
-    f.1.speed       = (d[2] as i16) << 8 | d[3] as i16;
+    f.1.velocity    = (d[2] as i16) << 8 | d[3] as i16;
     f.1.current     = (d[4] as i16) << 8 | d[5] as i16;
     f.1.temperature = d[6] as u16;
     // Apparently this is frowned-upon but it looks a lot cooler
@@ -263,7 +265,7 @@ pub extern "C" fn get(gm6020_can: *mut Gm6020Can, id: u8, field: FbField) -> f64
     }
     match field {
         FbField::Position    => handle.feedbacks[(id-1)as usize].1.position as f64/POS_MAX as f64 *2f64*PI,
-        FbField::Speed       => handle.feedbacks[(id-1)as usize].1.speed as f64,
+        FbField::Velocity    => handle.feedbacks[(id-1)as usize].1.velocity as f64,
         FbField::Current     => handle.feedbacks[(id-1)as usize].1.current as f64 / 1000f64,
         FbField::Temperature => handle.feedbacks[(id-1)as usize].1.temperature as f64,
     }
