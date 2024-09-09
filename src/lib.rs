@@ -21,15 +21,15 @@ pub const ID_MIN: u8 = 1;
 pub const ID_MAX: u8 = 7;
 const POS_MAX   : u16 = 8191;
 
-
-const RPM_PER_V   : f64 =  13.33;
-pub const N_PER_A : f64 = 741.0;
-pub const V_MAX   : f64 =  24.0;
-pub const I_MAX   : f64 =   1.62;
-const I_FB_MAX    : f64 =   3.0;
+pub const RPM_PER_ANGULAR : f64 = 60.0/(2.0*3.14159);
+pub const RPM_PER_V : f64 =  13.33;
+pub const N_PER_A   : f64 = 741.0;
+pub const V_MAX     : f64 =  24.0;
+pub const I_MAX     : f64 =   1.62;
+pub const TEMP_MAX  : u8  = 125; // C
+const I_FB_MAX      : f64 =   3.0;
 const V_CMD_MAX : f64 = 25000.0;
 const I_CMD_MAX : f64 = 16384.0;
-const TEMP_MAX   : u8  = 125; // C
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[repr(C)]
@@ -100,6 +100,7 @@ fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
 }
 
 // Below 100Hz the feedback values get weird - CAN buffer filling up?
+// TODO can we pass in a shared atomic bool from C++?
 #[no_mangle]
 pub extern "C" fn gm6020_can_run(gm6020_can: *mut Gm6020Can, period_ms: u64) -> i8{
     let handle: &mut Gm6020Can;
@@ -147,7 +148,7 @@ fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Resul
     let idx = (id-1) as usize;
     if gm6020_can.feedbacks[idx].1.temperature >= TEMP_MAX as u16 { gm6020_can.commands[idx] = 0; return Err(format!("temperature overload [{}]: {}", TEMP_MAX, gm6020_can.feedbacks[idx].1.temperature));}
     if mode == CmdMode::Torque {return set_cmd(gm6020_can, id, CmdMode::Current, cmd/N_PER_A);}
-    if mode == CmdMode::Velocity  {return set_cmd(gm6020_can, id, CmdMode::Voltage, cmd/RPM_PER_V);}
+    if mode == CmdMode::Velocity  {return set_cmd(gm6020_can, id, CmdMode::Voltage, cmd*RPM_PER_ANGULAR/RPM_PER_V);}
     if mode == CmdMode::Voltage && cmd.abs() > V_MAX { return Err(format!("voltage out of range [{}, {}]: {}", -1.0*V_MAX, V_MAX, cmd));}
     if mode == CmdMode::Current && cmd.abs() > I_MAX { return Err(format!("current out of range [{}, {}]: {}", -1.0*I_MAX, I_MAX, cmd));}
     if mode != gm6020_can.mode {
@@ -166,7 +167,7 @@ fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Resul
 
 
 #[no_mangle]
-pub extern "C" fn gm6020_can_cmd_single(gm6020_can: *mut Gm6020Can, mode: CmdMode, id: u8, cmd: f64) -> i8{
+pub extern "C" fn gm6020_can_cmd_single(gm6020_can: *mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> i8{
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
         println!("Invalid handle (null pointer)");
@@ -175,9 +176,9 @@ pub extern "C" fn gm6020_can_cmd_single(gm6020_can: *mut Gm6020Can, mode: CmdMod
     else{
         handle = unsafe{&mut *gm6020_can};
     }
-    _cmd_single(handle, mode, id, cmd).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
+    _cmd_single(handle, id, mode, cmd).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
 }
-fn _cmd_single(gm6020_can: &mut Gm6020Can, mode: CmdMode, id: u8, cmd: f64) -> Result<(), String> {
+fn _cmd_single(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Result<(), String> {
     if id<ID_MIN || id>ID_MAX { return Err(format!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id)); }
     set_cmd(gm6020_can, id, mode, cmd)?;
     Ok(())
