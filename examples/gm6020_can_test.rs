@@ -20,34 +20,34 @@ const ID: u8 = 1;                                 // Motor ID [1,7]
 fn main() {
     // Open SocketCAN device
     let ifname: std::ffi::CString = CString::new("can0").expect("CString::new failed");
-    let gmc: *mut Gm6020Can = gm6020_can::init(ifname.as_ptr());
-    if gmc.is_null(){
+    let gmc_: *mut Gm6020Can = gm6020_can::gm6020_can_init(ifname.as_ptr());
+    if gmc_.is_null(){
         println!("Unable to open specified SocketCAN device");
         return;
     }
 
     // Start another thread to collect feedback values
-    gm6020_can::run(gmc, PERIOD);
+    gm6020_can::gm6020_can_run(gmc_, PERIOD);
 
     // Start another thread to print current values
     let shared_stop = Arc::new(AtomicBool::new(false)).clone();
-    let dbg = gm6020_can::debug_thread(gmc, ID, FbField::Current, shared_stop.clone());
+    let dbg = gm6020_can::debug_thread(gmc_, ID, FbField::Current, shared_stop.clone());
 
     // Ramp up, ramp down, ramp up (negative), ramp down (negative)
     for voltage in (0 .. MAX+1).step_by(2) {
-        gm6020_can::cmd_single(gmc, CmdMode::Voltage, ID, voltage as f64 / 10f64);
+        gm6020_can::gm6020_can_cmd_single(gmc_, CmdMode::Voltage, ID, voltage as f64 / 10f64);
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     for voltage in (0 .. MAX).rev().step_by(2) {
-        gm6020_can::cmd_single(gmc, CmdMode::Voltage, ID, voltage as f64 / 10f64);
+        gm6020_can::gm6020_can_cmd_single(gmc_, CmdMode::Voltage, ID, voltage as f64 / 10f64);
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     for voltage in (-1*MAX .. 0).rev().step_by(2) {
-        gm6020_can::cmd_single(gmc, CmdMode::Voltage, ID, voltage as f64 / 10f64);
+        gm6020_can::gm6020_can_cmd_single(gmc_, CmdMode::Voltage, ID, voltage as f64 / 10f64);
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     for voltage in (-1*MAX+1 .. 1).step_by(2) {
-        gm6020_can::cmd_single(gmc, CmdMode::Voltage, ID, voltage as f64 / 10f64);
+        gm6020_can::gm6020_can_cmd_single(gmc_, CmdMode::Voltage, ID, voltage as f64 / 10f64);
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     // Stop the thread that was printing current values
@@ -55,10 +55,10 @@ fn main() {
     let _ = dbg.join();
 
     // Send constant voltage command and read out position feedback
-    gm6020_can::cmd_single(gmc, CmdMode::Voltage, ID, 1f64);
+    gm6020_can::gm6020_can_cmd_single(gmc_, CmdMode::Voltage, ID, 1f64);
     loop{
         thread::sleep(std::time::Duration::from_millis(50));
-        println!("{}", gm6020_can::get(gmc, ID, FbField::Position));
+        println!("{}", gm6020_can::gm6020_can_get(gmc_, ID, FbField::Position));
     }
 }
 

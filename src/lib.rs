@@ -22,11 +22,11 @@ pub const ID_MAX: u8 = 7;
 const POS_MAX   : u16 = 8191;
 
 
-const RPM_PER_V  : f64 =  13.33;
-const N_PER_A    : f64 = 741.0;
-pub const V_MAX  : f64 =  24.0;
-pub const I_MAX  : f64 =   1.62;
-const I_FB_MAX   : f64 =   3.0;
+const RPM_PER_V   : f64 =  13.33;
+pub const N_PER_A : f64 = 741.0;
+pub const V_MAX   : f64 =  24.0;
+pub const I_MAX   : f64 =   1.62;
+const I_FB_MAX    : f64 =   3.0;
 const V_CMD_MAX : f64 = 25000.0;
 const I_CMD_MAX : f64 = 16384.0;
 const TEMP_MAX   : u8  = 125; // C
@@ -73,7 +73,7 @@ pub struct Gm6020Can {
 // TODO handle CAN no buffer left
 
 #[no_mangle]
-pub extern "C" fn init(interface: *const c_char) -> *mut Gm6020Can{
+pub extern "C" fn gm6020_can_init(interface: *const c_char) -> *mut Gm6020Can{
     let inter: &str;
     if interface.is_null() {
         println!("Invalid c-string received for interface name (null pointer)");
@@ -101,7 +101,7 @@ fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
 
 // Below 100Hz the feedback values get weird - CAN buffer filling up?
 #[no_mangle]
-pub extern "C" fn run(gm6020_can: *mut Gm6020Can, period_ms: u64) -> i8{
+pub extern "C" fn gm6020_can_run(gm6020_can: *mut Gm6020Can, period_ms: u64) -> i8{
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
         println!("Invalid handle (null pointer)");
@@ -121,7 +121,7 @@ fn _run(gm6020_can: &mut Gm6020Can, period_ms: u64) -> Result<(), String>{
     }
 }
 #[no_mangle]
-pub extern "C" fn run_once(gm6020_can: *mut Gm6020Can) -> i8{
+pub extern "C" fn gm6020_can_run_once(gm6020_can: *mut Gm6020Can) -> i8{
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
         println!("Invalid handle (null pointer)");
@@ -166,7 +166,7 @@ fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Resul
 
 
 #[no_mangle]
-pub extern "C" fn cmd_single(gm6020_can: *mut Gm6020Can, mode: CmdMode, id: u8, cmd: f64) -> i8{
+pub extern "C" fn gm6020_can_cmd_single(gm6020_can: *mut Gm6020Can, mode: CmdMode, id: u8, cmd: f64) -> i8{
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
         println!("Invalid handle (null pointer)");
@@ -184,7 +184,7 @@ fn _cmd_single(gm6020_can: &mut Gm6020Can, mode: CmdMode, id: u8, cmd: f64) -> R
 }
 
 #[no_mangle]
-pub extern "C" fn cmd_multiple(gm6020_can: *mut Gm6020Can, mode: CmdMode, cmds: *const *const f64, len: u8) -> i8{
+pub extern "C" fn gm6020_can_cmd_multiple(gm6020_can: *mut Gm6020Can, mode: CmdMode, cmds: *const *const f64, len: u8) -> i8{
     let handle: &mut Gm6020Can;
     let cmds2: &[&[f64]]; // TODO better naming
     if gm6020_can.is_null() || cmds.is_null(){
@@ -253,7 +253,7 @@ fn rx_fb(gm6020_can: &mut Gm6020Can, frame: CanDataFrame){
 }
 
 #[no_mangle]
-pub extern "C" fn get(gm6020_can: *mut Gm6020Can, id: u8, field: FbField) -> f64{
+pub extern "C" fn gm6020_can_get(gm6020_can: *mut Gm6020Can, id: u8, field: FbField) -> f64{
     if id<ID_MIN || id>ID_MAX { eprintln!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id); panic!();}
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
@@ -284,7 +284,7 @@ pub fn debug_thread(gm6020_can: *mut Gm6020Can, id: u8, field: FbField, stop: Ar
     thread::spawn( move ||
         while ! stop.load(Ordering::Relaxed){
             thread::sleep(std::time::Duration::from_millis(50));
-            let val = get(handle, id, field);
+            let val = gm6020_can_get(handle, id, field);
             print!("{}\t", val);
             match field {
                 FbField::Current => println!("{:#<1$}", "", (val.abs()/I_FB_MAX*20f64) as usize),
