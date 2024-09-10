@@ -23,7 +23,7 @@ const POS_MAX   : u16 = 8191;
 
 pub const RPM_PER_ANGULAR : f64 = 60.0/(2.0*3.14159);
 pub const RPM_PER_V : f64 =  13.33;
-pub const N_PER_A   : f64 = 741.0;
+pub const NM_PER_A  : f64 =   0.741;
 pub const V_MAX     : f64 =  24.0;
 pub const I_MAX     : f64 =   1.62;
 pub const TEMP_MAX  : u8  = 125; // C
@@ -147,19 +147,26 @@ fn _run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
 fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Result<(), String> {
     let idx = (id-1) as usize;
     if gm6020_can.feedbacks[idx].1.temperature >= TEMP_MAX as u16 { gm6020_can.commands[idx] = 0; return Err(format!("temperature overload [{}]: {}", TEMP_MAX, gm6020_can.feedbacks[idx].1.temperature));}
-    if mode == CmdMode::Torque {return set_cmd(gm6020_can, id, CmdMode::Current, cmd/N_PER_A);}
+    if mode == CmdMode::Torque {return set_cmd(gm6020_can, id, CmdMode::Current, cmd/NM_PER_A);}
     if mode == CmdMode::Velocity  {return set_cmd(gm6020_can, id, CmdMode::Voltage, cmd*RPM_PER_ANGULAR/RPM_PER_V);}
-    if mode == CmdMode::Voltage && cmd.abs() > V_MAX { return Err(format!("voltage out of range [{}, {}]: {}", -1.0*V_MAX, V_MAX, cmd));}
-    if mode == CmdMode::Current && cmd.abs() > I_MAX { return Err(format!("current out of range [{}, {}]: {}", -1.0*I_MAX, I_MAX, cmd));}
+    if mode == CmdMode::Voltage && cmd.abs() > V_MAX {
+        eprintln!("Warning: voltage out of range [{}, {}]: {}. Clamping.", -1.0*V_MAX, V_MAX, cmd);
+        return set_cmd(gm6020_can, id, CmdMode::Voltage, V_MAX*cmd.abs()/cmd);
+    }
+    if mode == CmdMode::Current && cmd.abs() > I_MAX {
+        eprintln!("Warning: current out of range [{}, {}]: {}. Clamping.", -1.0*I_MAX, I_MAX, cmd);
+        return set_cmd(gm6020_can, id, CmdMode::Current, I_MAX*cmd.abs()/cmd);
+    }
     if mode != gm6020_can.mode {
         println!("Warning: changing command mode affects all motors on this bus.");
         for i in 0..(ID_MAX-ID_MIN)as usize{
             gm6020_can.commands[i] = 0;
         }
+        gm6020_can.mode = mode;
     }
     gm6020_can.commands[idx] = match mode {
-        CmdMode::Voltage => (V_CMD_MAX/V_MAX*cmd) as i16,
-        CmdMode::Current => (I_CMD_MAX/I_MAX*cmd) as i16,
+        CmdMode::Voltage => (V_CMD_MAX*cmd/V_MAX) as i16,
+        CmdMode::Current => (I_CMD_MAX*cmd/I_MAX) as i16,
         _ => panic!(),
     };
     Ok(())
@@ -266,8 +273,8 @@ pub extern "C" fn gm6020_can_get(gm6020_can: *mut Gm6020Can, id: u8, field: FbFi
     }
     match field {
         FbField::Position    => handle.feedbacks[(id-1)as usize].1.position as f64/POS_MAX as f64 *2f64*PI,
-        FbField::Velocity    => handle.feedbacks[(id-1)as usize].1.velocity as f64,
-        FbField::Current     => handle.feedbacks[(id-1)as usize].1.current as f64 / 1000f64,
+        FbField::Velocity    => handle.feedbacks[(id-1)as usize].1.velocity as f64/RPM_PER_ANGULAR,
+        FbField::Current     => handle.feedbacks[(id-1)as usize].1.current as f64/I_CMD_MAX, // TODO units?
         FbField::Temperature => handle.feedbacks[(id-1)as usize].1.temperature as f64,
     }
 }
