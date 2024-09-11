@@ -35,19 +35,19 @@ fn main() {
 
     // Ramp up, ramp down, ramp up (negative), ramp down (negative)
     for voltage in (0 .. MAX+1).step_by(2) {
-        gm6020_can::gm6020_can_cmd_single(gmc_, ID, CmdMode::Voltage, voltage as f64 / 10f64);
+        gm6020_can::gm6020_can_set_cmd(gmc_, ID, CmdMode::Voltage, voltage as f64 / 10f64);
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     for voltage in (0 .. MAX).rev().step_by(2) {
-        gm6020_can::gm6020_can_cmd_single(gmc_, ID, CmdMode::Voltage, voltage as f64 / 10f64);
+        gm6020_can::gm6020_can_set_cmd(gmc_, ID, CmdMode::Voltage, voltage as f64 / 10f64);
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     for voltage in (-1*MAX .. 0).rev().step_by(2) {
-        gm6020_can::gm6020_can_cmd_single(gmc_, ID, CmdMode::Voltage, voltage as f64 / 10f64);
+        gm6020_can::gm6020_can_set_cmd(gmc_, ID, CmdMode::Voltage, voltage as f64 / 10f64);
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     for voltage in (-1*MAX+1 .. 1).step_by(2) {
-        gm6020_can::gm6020_can_cmd_single(gmc_, ID, CmdMode::Voltage, voltage as f64 / 10f64);
+        gm6020_can::gm6020_can_set_cmd(gmc_, ID, CmdMode::Voltage, voltage as f64 / 10f64);
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     // Stop the thread that was printing current values
@@ -55,10 +55,10 @@ fn main() {
     let _ = dbg.join();
 
     // Send constant voltage command and read out position feedback
-    gm6020_can::gm6020_can_cmd_single(gmc_, ID, CmdMode::Voltage, 1f64);
+    gm6020_can::gm6020_can_set_cmd(gmc_, ID, CmdMode::Voltage, 1f64);
     loop{
         thread::sleep(std::time::Duration::from_millis(50));
-        println!("{}", gm6020_can::gm6020_can_get(gmc_, ID, FbField::Position));
+        println!("{}", gm6020_can::gm6020_can_get_state(gmc_, ID, FbField::Position));
     }
 }
 
