@@ -1,7 +1,7 @@
 use gm6020_can::{CmdMode, FbField, Gm6020Can};
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::sync::Arc;
 
 //////
@@ -16,6 +16,7 @@ const PERIOD: u64 = (1.0f64/(RATE as f64)*1000.0)as u64;
 const INC: u64 = 10;                              // Time between commands
 const MAX: i16 = (gm6020_can::V_MAX)as i16 * 10;  // Need the 10x multiplier so we can easily increment in for loops (can't increment floats).
 const ID: u8 = 1;                                 // Motor ID [1,7]
+const FB_FIELD: FbField = FbField::Current;       // The field to be reported by the debug thread
 
 fn main() {
     // Open SocketCAN device
@@ -26,12 +27,33 @@ fn main() {
         return;
     }
 
-    // Start another thread to collect feedback values
+    // Start another thread to collect feedback values and write commands
     gm6020_can::gm6020_can_run(gmc_, PERIOD);
 
     // Start another thread to print current values
-    let shared_stop = Arc::new(AtomicBool::new(false)).clone();
-    let dbg = gm6020_can::debug_thread(gmc_, ID, FbField::Current, shared_stop.clone());
+    let shared_stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let shared_stop_ref2: Arc<AtomicBool> = shared_stop.clone();
+
+    let handle: &mut Gm6020Can;
+    if gmc_.is_null(){
+        println!("Invalid handle (null pointer)");
+        panic!();
+    }
+    handle = unsafe{&mut *gmc_}; // Wrap the raw pointer into Rust object
+
+    // Spawn another thread to visualize the feedback values
+    let dbg: JoinHandle<()> = thread::spawn( move ||
+        while ! shared_stop_ref2.load(Ordering::Relaxed){
+            thread::sleep(std::time::Duration::from_millis(50));
+            let val = gm6020_can::gm6020_can_get_state(handle, ID, FB_FIELD);
+            print!("{}\t", val);
+            match FB_FIELD {
+                FbField::Current => println!("{:#<1$}", "", (val.abs()/gm6020_can::I_FB_MAX*20f64) as usize),
+                FbField::Temperature => println!("{:#<1$}", "", val as usize),
+                _ => println!("")
+            }
+        }
+    );
 
     // Ramp up, ramp down, ramp up (negative), ramp down (negative)
     for voltage in (0 .. MAX+1).step_by(2) {

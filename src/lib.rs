@@ -8,7 +8,7 @@ use std::ptr::null;
 use std::time::SystemTime;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::sync::Arc;
 
 
@@ -27,7 +27,7 @@ pub const NM_PER_A  : f64 =   0.741;
 pub const V_MAX     : f64 =  24.0;
 pub const I_MAX     : f64 =   1.62;
 pub const TEMP_MAX  : u8  = 125; // C
-const I_FB_MAX      : f64 =   3.0;
+pub const I_FB_MAX  : f64 =   3.0;
 const V_CMD_MAX : f64 = 25000.0;
 const I_CMD_MAX : f64 = 16384.0;
 
@@ -88,19 +88,21 @@ struct Feedback {
 pub struct Gm6020Can {
     socket: Option<CanSocket>,
     // (ID_MAX-ID_MIN+1) as usize   only 7 slots will be used but 8 is convenient for tx_cmd (last item unused)
-    modes: [CmdMode; 8],
-    commands: [i16; 8],
+    modes    : [CmdMode; 8], //todo rwlock these
+    commands : [i16; 8],
     feedbacks: [(Option<SystemTime>, Feedback); 8],
 }
 
+
 // TODO handle CAN no buffer left
+// TODO try to reduce panics and handle errors more gracefully
 
 /*
 **  interface: SocketCAN interface name e.g. "can0"
 **  returns: pointer to Gm6020Can struct, to be passed to other functions in this library
 */
 #[no_mangle]
-pub extern "C" fn gm6020_can_init(interface: *const c_char) -> *mut Gm6020Can{
+pub extern "C" fn gm6020_can_init(interface: *const c_char) -> *mut Gm6020Can {
     let inter: &str;
     if interface.is_null() {
         println!("Invalid c-string received for interface name (null pointer)");
@@ -119,15 +121,39 @@ pub extern "C" fn gm6020_can_init(interface: *const c_char) -> *mut Gm6020Can{
     _init(inter).map_or_else(|e| {eprintln!("{}", e); null::<Gm6020Can>() as *mut Gm6020Can}, |v| Box::into_raw(v) as *mut Gm6020Can)
 }
 fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
-    let mut gm6020_can: Box<Gm6020Can> = Box::new(Gm6020Can::default());                                  // Box is like std::unique_ptr in C++  // TODO technically a memory leak - also make sure socket is closed
+    let mut gm6020_can: Box<Gm6020Can> = Box::new(Gm6020Can::default());                                  // Box is like std::unique_ptr in C++
     gm6020_can.as_mut().socket = Some(CanSocket::open(&interface).map_err(|err| err.to_string())?);       // Attempt to open the given interface
     let filter = CanFilter::new(FB_ID_BASE as u32, 0xffff - 0xf);                                         // Create a filter to only accept messages with IDs from 0x200 to 0x20F (Motor feedbacks are 0x205 to 0x20B)
     gm6020_can.as_ref().socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?;  // Apply the filter to our interface
     return Ok(gm6020_can);
 }
 
+
+/*
+**  Clean up pointers and release the socket
+**  gm6020_can: 'handle' to act upon
+**  run_stopper: raw pointer to Arc<AtomicBool> which is shared with the run thread
+*/
+#[no_mangle]
+pub extern "C" fn gm6020_can_cleanup(gm6020_can: *mut Gm6020Can, run_stopper: *mut std::ffi::c_void){
+    if gm6020_can.is_null(){
+        eprintln!("Invalid handle (null pointer)");
+    }
+    else{
+        unsafe{drop(Box::from_raw(gm6020_can));}// Delete the pointer. The socket is automatically closed when the object is dropped.
+    }
+    if run_stopper.is_null() {
+        eprintln!("Invalid run_stopper (null pointer)");
+    }
+    else{
+        let stop: &mut Arc<AtomicBool> = unsafe{&mut *(run_stopper as *mut Arc<AtomicBool>)};
+        stop.store(true, Ordering::Relaxed); // Stop the thread
+        unsafe{drop(Box::from_raw(run_stopper))}; // Delete the pointer - actually just decreases the reference count, it won't be deleted until the thread also drops its reference.
+    }
+}
+
+
 // TODO Below 100Hz the feedback values get weird - CAN buffer filling up?
-// TODO can we pass in a shared atomic bool from C++?
 /*
 **  Spawn a thread to continuously update motor feedbacks and send commands.
 **
@@ -136,24 +162,22 @@ fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
 **  returns: 0 on success, -1 otherwise
 */
 #[no_mangle]
-pub extern "C" fn gm6020_can_run(gm6020_can: *mut Gm6020Can, period_ms: u64) -> i8{
+pub extern "C" fn gm6020_can_run(gm6020_can: *mut Gm6020Can, period_ms: u64) -> *mut std::ffi::c_void{
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
         println!("Invalid handle (null pointer)");
-        return -1;
+        return null::<Arc<AtomicBool>>() as *mut std::ffi::c_void;
     }
-    else{
-        handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
-    }
-    // TODO Can/should we use an async library instead
-    thread::spawn( move || _run(handle, period_ms).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8));
-    return 0;
-}
-fn _run(gm6020_can: &mut Gm6020Can, period_ms: u64) -> Result<(), String>{
-    loop {
-        _run_once(gm6020_can)?;
+    handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
+    let shared_stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let stop_ref_2: Arc<AtomicBool> = shared_stop.clone();
+    thread::spawn( move ||
+    while ! stop_ref_2.load(Ordering::Relaxed) {
+        _run_once(handle).map_or_else(|e| eprintln!("{}", e), |_| ());
         thread::sleep(std::time::Duration::from_millis(period_ms));
-    }
+    });
+
+    return Box::into_raw(Box::new(shared_stop)) as *mut std::ffi::c_void;
 }
 
 /*
@@ -169,12 +193,11 @@ pub extern "C" fn gm6020_can_run_once(gm6020_can: *mut Gm6020Can) -> i8{
         println!("Invalid handle (null pointer)");
         return -1;
     }
-    else{
-        handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
-    }
+    handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
     _run_once(handle).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
 }
 fn _run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
+    // TODO instead should we read every frame available in the buffer?
     // Read one frame and parse the feedback values
     match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(2)) { // feedbacks sent at 1kHz, use 2ms for slight leeway
         Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
@@ -183,13 +206,20 @@ fn _run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
         Err(err) => eprintln!("{}", err),
     };
 
+    // If a motor is not Disabled did not report any feedback for 100ms, report an error
+    for (i, fb) in (&gm6020_can.feedbacks).iter().enumerate() {
+        if gm6020_can.modes[i] != CmdMode::Disabled && fb.0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded.", (i as u8)+ID_MIN))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 100 {
+            eprintln!("Motor {} not responding. Are you reading frequently enough?", (i as u8)+ID_MIN);
+        }
+    }
+
     // Loop through all motors and check which combinations of IdRange and CmdMode actually need to be sent
     let mut i_l: bool = false;
     let mut i_h: bool = false;
     let mut v_l: bool = false;
     let mut v_h: bool = false;
     for (i, mode) in (&gm6020_can.modes).iter().enumerate() {
-        match (mode, IdRange::from_u8(i as u8 +1)) {
+        match (mode, IdRange::from_u8(i as u8 + ID_MIN)) {
             (CmdMode::Voltage, IdRange::Low ) => v_l = true,
             (CmdMode::Voltage, IdRange::High) => v_h = true,
             (CmdMode::Current, IdRange::Low ) => i_l = true,
@@ -222,9 +252,7 @@ pub extern "C" fn gm6020_can_set_cmd(gm6020_can: *mut Gm6020Can, id: u8, mode: C
         println!("Invalid handle (null pointer)");
         return -1;
     }
-    else{
-        handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
-    }
+    handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
     _set_cmd(handle, id, mode, cmd).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
 }
 fn _set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Result<(), String> {
@@ -273,16 +301,6 @@ fn _set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Resu
 **  mode: send voltage or current commands
 */
 fn tx_cmd(gm6020_can: &mut Gm6020Can, id_range: IdRange, mode: CmdMode) -> Result<(), String> {
-    // TODO change this to a warning, don't panic
-    // TODO is this really the best place for this?
-    // TODO what if the 'run' loop is not running, and the user is manually using run_once at an interval longer than the 10ms timeout?
-    // If a motor is not Disabled and has not given feedback for 10ms, report an error
-    for (i, fb) in (&gm6020_can.feedbacks[((id_range as u8) * 4) as usize .. (4 + (id_range as u8)*4) as usize]).iter().enumerate() {
-        if gm6020_can.modes[(i as u8 + (id_range as u8)*4) as usize] != CmdMode::Disabled && fb.0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded. Did you enter the `run` loop?", (i as u8)+ID_MIN))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 10 {
-            return Err(format!("Motor {} not responding. Did you enter the `run` loop?", (i as u8)+ID_MIN));
-        }
-    }
-
     // Determine which CAN id to send based on the command mode and id range
     let id: u16 = match (mode, id_range) {
         (CmdMode::Voltage, IdRange::Low ) => CMD_ID_V_L,
@@ -343,37 +361,11 @@ pub extern "C" fn gm6020_can_get_state(gm6020_can: *mut Gm6020Can, id: u8, field
         println!("Invalid handle");
         panic!();
     }
-    else{
-        handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
-    }
+    handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
     match field {
         FbField::Position    => handle.feedbacks[(id-1)as usize].1.position as f64/POS_MAX as f64 *2f64*PI,
         FbField::Velocity    => handle.feedbacks[(id-1)as usize].1.velocity as f64/RPM_PER_ANGULAR,
         FbField::Current     => handle.feedbacks[(id-1)as usize].1.current as f64/I_CMD_MAX, // TODO units?
         FbField::Temperature => handle.feedbacks[(id-1)as usize].1.temperature as f64,
     }
-}
-
-// TODO move this to the example.rs file - not available to C++ API anyways
-pub fn debug_thread(gm6020_can: *mut Gm6020Can, id: u8, field: FbField, stop: Arc<AtomicBool>) -> JoinHandle<()>{
-    let handle: &mut Gm6020Can;
-    if gm6020_can.is_null(){
-        println!("Invalid handle (null pointer)");
-        panic!();
-    }
-    else{
-        handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
-    }
-    thread::spawn( move ||
-        while ! stop.load(Ordering::Relaxed){
-            thread::sleep(std::time::Duration::from_millis(50));
-            let val = gm6020_can_get_state(handle, id, field);
-            print!("{}\t", val);
-            match field {
-                FbField::Current => println!("{:#<1$}", "", (val.abs()/I_FB_MAX*20f64) as usize),
-                FbField::Temperature => println!("{:#<1$}", "", val as usize),
-                _ => println!("")
-            }
-        }
-    )
 }
