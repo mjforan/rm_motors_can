@@ -62,7 +62,7 @@ impl Default for FbField {
 enum IdRange { Low, High }
 impl IdRange {
     fn from_u8(id: u8) -> IdRange {
-        if id < ID_MIN || id > ID_MAX {
+        if id < ID_MIN || id > ID_MAX + 1 { // +1 to account for full range of array in tx_cmd, even though it's not technically a valid ID
             panic!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id);
         }
         if id >= 5 {
@@ -125,6 +125,15 @@ fn _init(interface: &str) -> Result<Box<Gm6020Can>, String> {
     gm6020_can.as_mut().socket = Some(CanSocket::open(&interface).map_err(|err| err.to_string())?);       // Attempt to open the given interface
     let filter = CanFilter::new(FB_ID_BASE as u32, 0xffff - 0xf);                                         // Create a filter to only accept messages with IDs from 0x200 to 0x20F (Motor feedbacks are 0x205 to 0x20B)
     gm6020_can.as_ref().socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?;  // Apply the filter to our interface
+    // Read 100 frames to populate feedbacks - this prevents the run loop from thinking motors aren't initialized
+    for _ in 1..100 {
+        match gm6020_can.as_mut().socket.as_ref().unwrap().read_frame(){
+            Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can.as_mut(), frame),
+            Ok(CanFrame::Remote(frame)) => eprintln!("{:?}", frame),
+            Ok(CanFrame::Error(frame)) => eprintln!("{:?}", frame),
+            Err(err) => eprintln!("{}", err),
+        };
+    }
     return Ok(gm6020_can);
 }
 
@@ -197,19 +206,21 @@ pub extern "C" fn gm6020_can_run_once(gm6020_can: *mut Gm6020Can) -> i8{
     _run_once(handle).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
 }
 fn _run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
-    // TODO instead should we read every frame available in the buffer?
-    // Read one frame and parse the feedback values
-    match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(2)) { // feedbacks sent at 1kHz, use 2ms for slight leeway
-        Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
-        Ok(CanFrame::Remote(frame)) => eprintln!("{:?}", frame),
-        Ok(CanFrame::Error(frame)) => eprintln!("{:?}", frame),
-        Err(err) => eprintln!("{}", err),
-    };
+    // Read all available frames from buffer
+    let mut timed_out: bool = false;
+    while !timed_out {
+        match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_micros(1)){ // Feedbacks come in at 1kHz, much longer period than 1μs
+            Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
+            Ok(CanFrame::Remote(frame)) => eprintln!("{:?}", frame),
+            Ok(CanFrame::Error(frame)) => eprintln!("{:?}", frame),
+            Err(err) => if err.to_string() == "timed out" {timed_out=true} else {eprintln!("{}", err)},
+        };
+    }
 
     // If a motor is not Disabled did not report any feedback for 100ms, report an error
     for (i, fb) in (&gm6020_can.feedbacks).iter().enumerate() {
         if gm6020_can.modes[i] != CmdMode::Disabled && fb.0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded.", (i as u8)+ID_MIN))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 100 {
-            eprintln!("Motor {} not responding. Are you reading frequently enough?", (i as u8)+ID_MIN);
+            eprintln!("Haven't heard from Motor {} in over 100ms. Are you reading frequently enough?", (i as u8)+ID_MIN);
         }
     }
 
@@ -355,17 +366,16 @@ fn rx_fb(gm6020_can: &mut Gm6020Can, frame: CanDataFrame){
 */
 #[no_mangle]
 pub extern "C" fn gm6020_can_get_state(gm6020_can: *mut Gm6020Can, id: u8, field: FbField) -> f64{
-    if id<ID_MIN || id>ID_MAX { eprintln!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id); panic!();}
+    if id<ID_MIN || id>ID_MAX { panic!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id);}
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
-        println!("Invalid handle");
-        panic!();
+        panic!("Invalid handle");
     }
     handle = unsafe{&mut *gm6020_can}; // Wrap the raw pointer into Rust object
     match field {
         FbField::Position    => handle.feedbacks[(id-1)as usize].1.position as f64/POS_MAX as f64 *2f64*PI,
         FbField::Velocity    => handle.feedbacks[(id-1)as usize].1.velocity as f64/RPM_PER_ANGULAR,
-        FbField::Current     => handle.feedbacks[(id-1)as usize].1.current as f64/I_CMD_MAX, // TODO units?
+        FbField::Current     => handle.feedbacks[(id-1)as usize].1.current as f64/1000f64/I_FB_MAX,
         FbField::Temperature => handle.feedbacks[(id-1)as usize].1.temperature as f64,
     }
 }
