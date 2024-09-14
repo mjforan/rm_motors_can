@@ -1,6 +1,6 @@
 language = "C++"
 namespace = "gm6020_can"
-include_guard = "MY_CRATE_H"
+include_guard = "GM6020_CAN_H"
 
 [parse]
 # generate bindings for dependencies

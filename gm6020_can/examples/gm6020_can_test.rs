@@ -8,7 +8,7 @@ use ctrlc;
 // Example showing how to use gm6020_can library.
 //////
 /*
-cargo build --release --examples && ./target/release/examples/gm6020_can_test
+cargo run --release --example gm6020_can_test
 */
 
 const INC: u64 = 10;                              // Time (ms) between commands in the for loops
@@ -39,11 +39,10 @@ fn main() {
     let shared_final_ref2: Arc<AtomicBool> = shared_final.clone();
     let gmc_ref3: Arc<Gm6020Can> = gmc.clone();
     let _ = ctrlc::set_handler(move || {
-        println!("cleaning up");
-        // stop the other threads:
+        // stop the other threads
         shared_stop_ref3.store(true, Ordering::Relaxed);
-        // TODO wait for threads to join (probably need to use Option around JoinHandle)
-        gm6020_can::cleanup(gmc_ref3.clone());
+        // gently turn off the motors
+        gm6020_can::cleanup(gmc_ref3.clone(), 5);
         shared_final_ref2.store(true, Ordering::Relaxed);
     });
 
@@ -84,6 +83,8 @@ fn main() {
 
     // Send constant voltage command
     gm6020_can::set_cmd(gmc.clone(), ID, CmdMode::Voltage, 2f64).map_or_else(|e| eprintln!("{}", e), |_| ());
+    
+    // Wait for the ctl-c handler to finish cleaning up
     while ! shared_final.load(Ordering::Relaxed){
         thread::sleep(std::time::Duration::from_millis(50));
     }
