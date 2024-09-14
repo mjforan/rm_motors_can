@@ -4,6 +4,8 @@ use std::f64::consts::PI;
 use std::time::Duration;
 use embedded_can::{Frame as EmbeddedFrame, StandardId};
 use std::time::SystemTime;
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
 
 const FB_ID_BASE: u16 = 0x204;
 const CMD_ID_V_L: u16 = 0x1ff;
@@ -59,14 +61,15 @@ struct Feedback {
     temperature: u16, // C
 }
 
+pub const ARR_LEN: usize = 8;
 #[derive(Default)]
 #[repr(C)]
 pub struct Gm6020Can {
-    socket: Option<CanSocket>,
+    socket: Mutex<Option<CanSocket>>,
     // (ID_MAX-ID_MIN+1) as usize   only 7 slots will be used but 8 is convenient for tx_cmd (last item unused)
-    modes    : [CmdMode; 8], //todo rwlock these
-    commands : [i16; 8],
-    feedbacks: [(Option<SystemTime>, Feedback); 8],
+    modes    : RwLock<[CmdMode; ARR_LEN]>,
+    commands : RwLock<[i16; ARR_LEN]>,
+    feedbacks: RwLock<[(Option<SystemTime>, Feedback); ARR_LEN]>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -87,15 +90,16 @@ impl IdRange {
 }
 
 
-pub fn init(interface: &str) -> Result<Box<Gm6020Can>, String> {
-    let mut gm6020_can: Box<Gm6020Can> = Box::new(Gm6020Can::default());                                  // Box is like std::unique_ptr in C++
-    gm6020_can.as_mut().socket = Some(CanSocket::open(&interface).map_err(|err| err.to_string())?);       // Attempt to open the given interface
-    let filter = CanFilter::new(FB_ID_BASE as u32, 0xffff - 0xf);                                         // Create a filter to only accept messages with IDs from 0x200 to 0x20F (Motor feedbacks are 0x205 to 0x20B)
-    gm6020_can.as_ref().socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?;  // Apply the filter to our interface
+pub fn init(interface: &str) -> Result<Arc<Gm6020Can>, String> {
+    let gm6020_can: Arc<Gm6020Can> = Arc::new(Gm6020Can::default());                                  // Arc (Atomically Reference Counted) is like shared_ptr in C++
+    let socket: CanSocket = CanSocket::open(&interface).map_err(|err| err.to_string())?;  // Attempt to open the given interface
+    let filter: CanFilter = CanFilter::new(FB_ID_BASE as u32, 0xffff - 0xf);                                         // Create a filter to only accept messages with IDs from 0x200 to 0x20F (Motor feedbacks are 0x205 to 0x20B)
+    socket.set_filters(&[filter]).map_err(|err| err.to_string())?;             // Apply the filter to our interface
+    *gm6020_can.socket.lock().unwrap() = Some(socket);                     // Attach the filter to the gm6020_can object for future reading and writing
     // Read 100 frames to populate feedbacks - this prevents the run loop from thinking motors aren't initialized
     for _ in 1..100 {
-        match gm6020_can.as_mut().socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(10)){
-            Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can.as_mut(), frame),
+        match gm6020_can.socket.lock().unwrap().as_ref().ok_or_else(|| Err::<CanSocket, String>("Unable to lock socket".to_string())).unwrap().read_frame_timeout(Duration::from_millis(10)){
+            Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can.clone(), frame),
             Ok(CanFrame::Remote(frame)) => eprintln!("{:?}", frame),
             Ok(CanFrame::Error(frame)) => eprintln!("{:?}", frame),
             Err(err) => if err.to_string() == "timed out" {return Err(String::from("Error: timed out waiting for initial connection to motor"))} else {eprintln!("{}", err)},
@@ -105,14 +109,55 @@ pub fn init(interface: &str) -> Result<Box<Gm6020Can>, String> {
 }
 
 
+/*
+**  Clean up pointers and release the socket
+**  gm6020_can: 'handle' to act upon
+*/
+pub fn cleanup(gm6020_can: Arc<Gm6020Can>){
+    // Ramp down commands to avoid jerking stop
+    let mut threads: Vec<thread::JoinHandle<()>> = Vec::new();
+    for i in 0 .. ARR_LEN {
+        let m: CmdMode = gm6020_can.modes.read().unwrap()[i];
+        if m == CmdMode::Disabled {continue;}
+        let gmc: Arc<Gm6020Can> = gm6020_can.clone();
+        threads.push(thread::spawn( move ||{
+            let mut cmd: f64 = match m {
+                CmdMode::Voltage  => gmc.commands.read().unwrap()[i] as f64 /V_CMD_MAX*V_MAX,
+                CmdMode::Velocity => gmc.commands.read().unwrap()[i] as f64 /V_CMD_MAX*V_MAX,
+                CmdMode::Current  => gmc.commands.read().unwrap()[i] as f64 /I_CMD_MAX*I_MAX,
+                CmdMode::Torque   => gmc.commands.read().unwrap()[i] as f64 /I_CMD_MAX*I_MAX,
+                CmdMode::Disabled => panic!("Attempting to clean up disabled motor"),
+            };
+            let sign: f64 = cmd/cmd.abs();
+            loop{
+                if cmd.abs() <= 0.2 {
+                    set_cmd(gmc.clone(), i as u8+ID_MIN, m, 0f64).map_or_else(|e| eprintln!("{}", e), |_| ());
+                    run_once(gmc.clone()).map_or_else(|e| eprintln!("{}", e), |_| ());
+                    break;
+                }
+                cmd = cmd-sign*0.2;
+                set_cmd(gmc.clone(), i as u8+ID_MIN, m, cmd).map_or_else(|e| eprintln!("{}", e), |_| ());
+                run_once(gmc.clone()).map_or_else(|e| eprintln!("{}", e), |_| ());
+                thread::sleep(std::time::Duration::from_millis(5));                
+            }
+        }));
+    }
+    for thread in threads.into_iter() {
+        thread.join().expect("Couldn't join the cleanup thread");
+    }
+}
 
 
-pub fn run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
+
+
+pub fn run_once(gm6020_can: Arc<Gm6020Can>) -> Result<(), String>{
+    // TODO move this section to rx_fb
+    // TODO maybe do one .read().unwrap() on modes, feedbacks for the whole function scope
     // Read all available frames from buffer
     let mut timed_out: bool = false;
     while !timed_out {
-        match gm6020_can.socket.as_ref().unwrap().read_frame_timeout(Duration::from_micros(1)){ // Feedbacks come in at 1kHz, much longer period than 1μs
-            Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can, frame),
+        match gm6020_can.socket.lock().unwrap().as_ref().ok_or_else(|| Err::<CanSocket, String>("Socket not initialized".to_string())).unwrap().read_frame_timeout(Duration::from_micros(1)){ // Feedbacks come in at 1kHz, much longer period than 1μs
+            Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can.clone(), frame),
             Ok(CanFrame::Remote(frame)) => eprintln!("{:?}", frame),
             Ok(CanFrame::Error(frame)) => eprintln!("{:?}", frame),
             Err(err) => if err.to_string() == "timed out" {timed_out=true} else {eprintln!("{}", err)},
@@ -120,8 +165,8 @@ pub fn run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
     }
 
     // If a motor is not Disabled did not report any feedback for 100ms, report an error
-    for i in 0 .. gm6020_can.feedbacks.len() {
-        if gm6020_can.modes[i] != CmdMode::Disabled && gm6020_can.feedbacks[i].0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded.", (i as u8)+ID_MIN))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 100 {
+    for i in 0 .. ARR_LEN {
+        if gm6020_can.modes.read().unwrap()[i] != CmdMode::Disabled && gm6020_can.feedbacks.read().unwrap()[i].0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded.", (i as u8)+ID_MIN))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 100 {
             eprintln!("Haven't heard from Motor {} in over 100ms. Are you reading frequently enough?", (i as u8)+ID_MIN);
         }
     }
@@ -131,8 +176,8 @@ pub fn run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
     let mut i_h: bool = false;
     let mut v_l: bool = false;
     let mut v_h: bool = false;
-    for i in 0 .. gm6020_can.modes.len() {
-        match (gm6020_can.modes[i], IdRange::from_u8(i as u8 + ID_MIN)) {
+    for i in 0 .. ARR_LEN {
+        match (gm6020_can.modes.read().unwrap()[i], IdRange::from_u8(i as u8 + ID_MIN)) {
             (CmdMode::Voltage, IdRange::Low ) => v_l = true,
             (CmdMode::Voltage, IdRange::High) => v_h = true,
             (CmdMode::Current, IdRange::Low ) => i_l = true,
@@ -142,20 +187,20 @@ pub fn run_once(gm6020_can: &mut Gm6020Can) -> Result<(), String>{
     }
     // Send the commands, accumulating the results to return
     let mut r: Result<(), String> = Ok(());
-    if v_l {r = r.and_then(|_| tx_cmd(gm6020_can, IdRange::Low,  CmdMode::Voltage));}
-    if v_h {r = r.and_then(|_| tx_cmd(gm6020_can, IdRange::High, CmdMode::Voltage));}
-    if i_l {r = r.and_then(|_| tx_cmd(gm6020_can, IdRange::Low,  CmdMode::Current));}
-    if i_h {r = r.and_then(|_| tx_cmd(gm6020_can, IdRange::High, CmdMode::Current));}
+    if v_l {r = r.and_then(|_| tx_cmd(gm6020_can.clone(), IdRange::Low,  CmdMode::Voltage));}
+    if v_h {r = r.and_then(|_| tx_cmd(gm6020_can.clone(), IdRange::High, CmdMode::Voltage));}
+    if i_l {r = r.and_then(|_| tx_cmd(gm6020_can.clone(), IdRange::Low,  CmdMode::Current));}
+    if i_h {r = r.and_then(|_| tx_cmd(gm6020_can.clone(), IdRange::High, CmdMode::Current));}
     return r;
 }
 
 
-pub fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> Result<(), String> {
+pub fn set_cmd(gm6020_can: Arc<Gm6020Can>, id: u8, mode: CmdMode, cmd: f64) -> Result<(), String> {
     // Check id range and convert to array index
     if id<ID_MIN || id>ID_MAX { return Err(format!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id)); }
     let idx = (id-1) as usize;
     // If the motor is too hot, write 0 command and return error
-    if gm6020_can.feedbacks[idx].1.temperature >= TEMP_MAX as u16 { gm6020_can.commands[idx] = 0; return Err(format!("temperature overload [{}]: {}", TEMP_MAX, gm6020_can.feedbacks[idx].1.temperature));}
+    if gm6020_can.feedbacks.read().unwrap()[idx].1.temperature >= TEMP_MAX as u16 { gm6020_can.commands.write().unwrap()[idx] = 0; return Err(format!("temperature overload [{}]: {}", TEMP_MAX, gm6020_can.feedbacks.read().unwrap()[idx].1.temperature));}
     // Convert torque and velocity commands to corresponding current and voltage commands
     if mode == CmdMode::Torque {return set_cmd(gm6020_can, id, CmdMode::Current, cmd/NM_PER_A);}
     if mode == CmdMode::Velocity  {return set_cmd(gm6020_can, id, CmdMode::Voltage, cmd*RPM_PER_ANGULAR/RPM_PER_V);}
@@ -169,18 +214,18 @@ pub fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> R
         return set_cmd(gm6020_can, id, CmdMode::Current, I_MAX*cmd.abs()/cmd);
     }
     // Change the motor's mode if necessary
-    if gm6020_can.modes[idx] == CmdMode::Disabled {
+    if gm6020_can.modes.read().unwrap()[idx] == CmdMode::Disabled {
         println!("Setting motor {} to mode {}", id, mode);
-        gm6020_can.modes[idx] = mode;
+        gm6020_can.modes.write().unwrap()[idx] = mode;
     }
     // A motor's mode shouldn't change at runtime because it requires setting a parameter in RoboMaster Assistant
-    else if gm6020_can.modes[idx] != mode {
-        eprintln!("Warning! Changing mode of motor {} from {} to {}", id, gm6020_can.modes[idx], mode);
-        gm6020_can.modes[idx] = mode;
+    else if gm6020_can.modes.read().unwrap()[idx] != mode {
+        eprintln!("Warning! Changing mode of motor {} from {} to {}", id, gm6020_can.modes.read().unwrap()[idx], mode);
+        gm6020_can.modes.write().unwrap()[idx] = mode;
     }
 
     // Map the volts/amps command to the low-level range expected by the motor
-    gm6020_can.commands[idx] = match mode {
+    gm6020_can.commands.write().unwrap()[idx] = match mode {
         CmdMode::Voltage => (V_CMD_MAX*cmd/V_MAX) as i16,
         CmdMode::Current => (I_CMD_MAX*cmd/I_MAX) as i16,
         _ => panic!(),
@@ -195,7 +240,7 @@ pub fn set_cmd(gm6020_can: &mut Gm6020Can, id: u8, mode: CmdMode, cmd: f64) -> R
 **  id_range: send to low [1,4] or high [5,7] motors
 **  mode: send voltage or current commands
 */
-fn tx_cmd(gm6020_can: &mut Gm6020Can, id_range: IdRange, mode: CmdMode) -> Result<(), String> {
+fn tx_cmd(gm6020_can: Arc<Gm6020Can>, id_range: IdRange, mode: CmdMode) -> Result<(), String> {
     // Determine which CAN id to send based on the command mode and id range
     let id: u16 = match (mode, id_range) {
         (CmdMode::Voltage, IdRange::Low ) => CMD_ID_V_L,
@@ -206,14 +251,14 @@ fn tx_cmd(gm6020_can: &mut Gm6020Can, id_range: IdRange, mode: CmdMode) -> Resul
     };
 
     // Slice half of the commands array, depending on the id range
-    let cmds: &[i16] = &gm6020_can.commands[((id_range as u8) * 4) as usize .. (4 + (id_range as u8)*4) as usize];
+    let cmds: &[i16] = &gm6020_can.commands.read().unwrap()[((id_range as u8) * 4) as usize .. (4 + (id_range as u8)*4) as usize];
     // Construct a CAN frame using the ID and cmds data
     let frame = CanFrame::new(
         StandardId::new(id).unwrap(),
         &[(cmds[0]>>8) as u8, cmds[0] as u8, (cmds[1]>>8) as u8, cmds[1] as u8, (cmds[2]>>8) as u8, cmds[2] as u8, (cmds[3]>>8) as u8, cmds[3] as u8])
         .ok_or_else(|| Err::<CanFrame, String>("Failed to open socket".to_string())).unwrap();
     // Write the frame
-    gm6020_can.socket.as_ref().ok_or_else(|| Err::<CanSocket, String>("Socket not initialized".to_string())).unwrap().write_frame(&frame).map_err(|err| err.to_string())?;
+    gm6020_can.socket.lock().unwrap().as_ref().ok_or_else(|| Err::<CanSocket, String>("Socket not initialized".to_string())).unwrap().write_frame(&frame).map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -224,15 +269,15 @@ fn tx_cmd(gm6020_can: &mut Gm6020Can, id_range: IdRange, mode: CmdMode) -> Resul
 **  gm6020_can: the handle to update
 **  frame: the CAN frame to parse
 */
-fn rx_fb(gm6020_can: &mut Gm6020Can, frame: CanDataFrame){
+fn rx_fb(gm6020_can: Arc<Gm6020Can>, frame: CanDataFrame){
     // Convert CAN frame ID to motor ID
     let rxid: u16 = frame.raw_id() as u16;
     let id: u8 = (rxid-FB_ID_BASE)as u8;
     if id<ID_MIN || id>ID_MAX {return;}
 
     // Get a reference to the feedback object and data array to simplify the parsing code
-    let f: &mut (Option<SystemTime>, Feedback) = &mut gm6020_can.feedbacks[(id-1) as usize];
-    let d: &[u8] = &frame.data()[0..8];
+    let f: &mut (Option<SystemTime>, Feedback) = &mut gm6020_can.feedbacks.write().unwrap()[(id-1) as usize];
+    let d: &[u8] = &frame.data()[0..ARR_LEN];
     // Pull the feedback values out of the data array and save them in the feedback object
     f.0 = Some(SystemTime::now());// TODO waiting on socketcan library to implement hardware timestamps
     f.1.position    = (d[0] as u16) << 8 | d[1] as u16;
@@ -242,13 +287,11 @@ fn rx_fb(gm6020_can: &mut Gm6020Can, frame: CanDataFrame){
 }
 
 
-pub fn get_state(gm6020_can: &mut Gm6020Can, id: u8, field: FbField) -> f64{
+pub fn get_state(gm6020_can: Arc<Gm6020Can>, id: u8, field: FbField) -> f64{
     match field {
-        FbField::Position    => gm6020_can.feedbacks[(id-1)as usize].1.position as f64/POS_MAX as f64 *2f64*PI,
-        FbField::Velocity    => gm6020_can.feedbacks[(id-1)as usize].1.velocity as f64/RPM_PER_ANGULAR,
-        FbField::Current     => gm6020_can.feedbacks[(id-1)as usize].1.current as f64/1000f64/I_FB_MAX,
-        FbField::Temperature => gm6020_can.feedbacks[(id-1)as usize].1.temperature as f64,
+        FbField::Position    => gm6020_can.feedbacks.read().unwrap()[(id-1)as usize].1.position as f64/POS_MAX as f64 *2f64*PI,
+        FbField::Velocity    => gm6020_can.feedbacks.read().unwrap()[(id-1)as usize].1.velocity as f64/RPM_PER_ANGULAR,
+        FbField::Current     => gm6020_can.feedbacks.read().unwrap()[(id-1)as usize].1.current as f64/1000f64/I_FB_MAX,
+        FbField::Temperature => gm6020_can.feedbacks.read().unwrap()[(id-1)as usize].1.temperature as f64,
     }
 }
-
-
