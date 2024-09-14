@@ -93,11 +93,10 @@ fn main() {
 // Print out a simple bar chart of feedback values
 fn print_output(gm6020_can: Arc<Gm6020Can>) {
     let val = gm6020_can::get_state(gm6020_can, ID, FB_FIELD);
-    print!("{:.3}\t", val);
-    match FB_FIELD {
-        FbField::Position    => println!("{:#<1$}", "", (val*5f64) as usize),
-        FbField::Velocity    => println!("{:#<1$}", "", val.abs() as usize),
-        FbField::Current     => println!("{:#<1$}", "", (val.abs()*10f64) as usize),
-        FbField::Temperature => println!("{:#<1$}", "", val as usize),
-    }
+    println!("{:#<1$}", "", match FB_FIELD {
+        FbField::Position    => (val*5f64) as usize,
+        FbField::Velocity    => val.abs() as usize,
+        FbField::Current     => (val.abs()*10f64) as usize,
+        FbField::Temperature => val as usize,
+    })
 }
