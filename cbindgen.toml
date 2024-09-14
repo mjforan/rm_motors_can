@@ -1,0 +1,2 @@
+# TODO hardcoded path
+header="#include \"/home/mjforan/phalanx/gm6020_ros/gm6020_hw/gm6020_can/gm6020_can/include/gm6020_can.h\""

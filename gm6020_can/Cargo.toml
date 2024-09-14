@@ -1,5 +1,5 @@
 [package]
-name = "gm6020_can_cpp"
+name = "gm6020_can"
 version = "0.1.0"
 edition = "2021"
 authors = [
@@ -7,18 +7,22 @@ authors = [
 ]
 repository = "https://github.com/mjforan/gm6020_can"
 license = "MPL 2.0"
-description = "C++ bindings for gm6020_can"
+description = "CAN bus control interface of RoboMaster GM6020 motor"
 
 [dependencies]
-gm6020_can = { path = "gm6020_can" }
+embedded-can = "0.4.1"
+futures = "0.3.30"
+socketcan = "3.3.0"
 
 [build-dependencies]
 cbindgen = "0.26.0"
-cc = "1.1.18"
+
+[dev-dependencies]
+ctrlc = "3.4"
 
 [lib]
-name = "gm6020_can_cpp"
-crate-type = ["staticlib", "cdylib", "lib"]
+name = "gm6020_can"
+crate-type = ["lib"]
 
 [[example]]
 name = "gm6020_can_test"
