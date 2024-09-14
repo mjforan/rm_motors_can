@@ -4,7 +4,7 @@ fn main() {
   // Use cbindgen to create a C header
   println!("Generating C/C++ header");
   let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-  let output_path = std::path::PathBuf::from(crate_dir.clone()).join("include").join("gm6020_can_cpp.h");
+  let output_path = std::path::PathBuf::from(crate_dir.clone()).join("include").join("gm6020_can.h");
   cbindgen::generate(crate_dir).expect("Unable to generate bindings").write_to_file(output_path);
 
   // TODO bug in cc where it is unable to link to system libraries for an example in a lib crate  https://github.com/rust-lang/cc-rs/issues/1206

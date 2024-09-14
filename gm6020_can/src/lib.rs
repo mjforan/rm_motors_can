@@ -86,11 +86,6 @@ impl IdRange {
     }
 }
 
-// TODO there has to be a better way
-// Dummy function to ensure these types are included in the C++ header
-#[no_mangle]
-pub extern "C" fn types_dummy(a : CmdMode, b : FbField, c : Feedback, d : Gm6020Can){
-}
 
 pub fn init(interface: &str) -> Result<Box<Gm6020Can>, String> {
     let mut gm6020_can: Box<Gm6020Can> = Box::new(Gm6020Can::default());                                  // Box is like std::unique_ptr in C++
@@ -255,3 +250,5 @@ pub fn get_state(gm6020_can: &mut Gm6020Can, id: u8, field: FbField) -> f64{
         FbField::Temperature => gm6020_can.feedbacks[(id-1)as usize].1.temperature as f64,
     }
 }
+
+

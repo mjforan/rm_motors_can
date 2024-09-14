@@ -1,2 +1,11 @@
-# TODO hardcoded path
-header="#include \"/home/mjforan/phalanx/gm6020_ros/gm6020_hw/gm6020_can/gm6020_can/include/gm6020_can.h\""
+language = "C++"
+namespace = "gm6020_can"
+include_guard = "MY_CRATE_H"
+
+[parse]
+# generate bindings for dependencies
+parse_deps = true
+# but actually only this crate and the one dependency
+include = ["gm6020_can_cpp", "gm6020_can"]
+# and yes, I really do mean this one
+extra_bindings = ["gm60_x"]

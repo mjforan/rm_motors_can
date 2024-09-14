@@ -14,7 +14,7 @@ use std::sync::Arc;
 **  returns: pointer to Gm6020Can struct, to be passed to other functions in this library
 */
 #[no_mangle]
-pub extern "C" fn gm6020_can_init(interface: *const c_char) -> *mut std::ffi::c_void {
+pub extern "C" fn init(interface: *const c_char) -> *mut std::ffi::c_void {
     let inter: &str;
     if interface.is_null() {
         println!("Invalid c-string received for interface name (null pointer)");
@@ -30,7 +30,7 @@ pub extern "C" fn gm6020_can_init(interface: *const c_char) -> *mut std::ffi::c_
             inter = r.unwrap();
         }
     }
-    init(inter).map_or_else(|e| {eprintln!("{}", e); null::<Gm6020Can>() as *mut std::ffi::c_void}, |v| Box::into_raw(v) as *mut std::ffi::c_void)
+    gm6020_can::init(inter).map_or_else(|e| {eprintln!("{}", e); null::<Gm6020Can>() as *mut std::ffi::c_void}, |v| Box::into_raw(v) as *mut std::ffi::c_void)
 }
 
 
@@ -40,7 +40,7 @@ pub extern "C" fn gm6020_can_init(interface: *const c_char) -> *mut std::ffi::c_
 **  run_stopper: raw pointer to Arc<AtomicBool> which is shared with the run thread
 */
 #[no_mangle]
-pub extern "C" fn gm6020_can_cleanup(gm6020_can: *mut std::ffi::c_void, run_stopper: *mut std::ffi::c_void){
+pub extern "C" fn cleanup(gm6020_can: *mut std::ffi::c_void, run_stopper: *mut std::ffi::c_void){
     if gm6020_can.is_null(){
         println!("Invalid handle (null pointer)");
         return;
@@ -98,13 +98,13 @@ pub extern "C" fn gm6020_can_cleanup(gm6020_can: *mut std::ffi::c_void, run_stop
 **  returns: 0 on success, -1 otherwise
 */
 #[no_mangle]
-pub extern "C" fn gm6020_can_run_once(gm6020_can: *mut std::ffi::c_void) -> i8{
+pub extern "C" fn run_once(gm6020_can: *mut std::ffi::c_void) -> i8{
     if gm6020_can.is_null(){
         println!("Invalid handle (null pointer)");
         return -1;
     }
     let handle: &mut Gm6020Can = unsafe{&mut *(gm6020_can as *mut Gm6020Can)}; // Wrap the raw pointer into Rust object
-    run_once(handle).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
+    gm6020_can::run_once(handle).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
 }
 
 
@@ -117,14 +117,14 @@ pub extern "C" fn gm6020_can_run_once(gm6020_can: *mut std::ffi::c_void) -> i8{
 **  cmd: actual command value
 */
 #[no_mangle]
-pub extern "C" fn gm6020_can_set_cmd(gm6020_can: *mut std::ffi::c_void, id: u8, mode: CmdMode, cmd: f64) -> i8{
+pub extern "C" fn set_cmd(gm6020_can: *mut std::ffi::c_void, id: u8, mode: CmdMode, cmd: f64) -> i8{
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
         println!("Invalid handle (null pointer)");
         return -1;
     }
     handle = unsafe{&mut *(gm6020_can as *mut Gm6020Can)}; // Wrap the raw pointer into Rust object
-    set_cmd(handle, id, mode, cmd).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
+    gm6020_can::set_cmd(handle, id, mode, cmd).map_or_else(|e| {eprintln!("{}", e); -1_i8}, |_| 0_i8)
 }
 
 
@@ -137,22 +137,22 @@ pub extern "C" fn gm6020_can_set_cmd(gm6020_can: *mut std::ffi::c_void, id: u8, 
 **  field: the feedback item to get
 */
 #[no_mangle]
-pub extern "C" fn gm6020_can_get_state(gm6020_can: *mut std::ffi::c_void, id: u8, field: FbField) -> f64{
+pub extern "C" fn get_state(gm6020_can: *mut std::ffi::c_void, id: u8, field: FbField) -> f64{
     if id<ID_MIN || id>ID_MAX { panic!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id);}
     let handle: &mut Gm6020Can;
     if gm6020_can.is_null(){
         panic!("Invalid handle");
     }
     handle = unsafe{&mut *(gm6020_can as *mut Gm6020Can)}; // Wrap the raw pointer into Rust object
-    get_state(handle, id, field)
+    gm6020_can::get_state(handle, id, field)
 }
 
 
 
 
 #[link(name = "gm6020_can_test_cpp")]
-extern { fn gm6020_can_test_cpp(); }
+extern { fn test_cpp(); }
 // TODO this is only here due to a bug in the cc crate preventing c++ in examples: https://github.com/rust-lang/cc-rs/issues/1206
 pub unsafe fn cpp_example(){
-    gm6020_can_test_cpp();
+    test_cpp();
 }
