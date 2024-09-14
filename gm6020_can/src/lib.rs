@@ -94,11 +94,11 @@ pub fn init(interface: &str) -> Result<Box<Gm6020Can>, String> {
     gm6020_can.as_ref().socket.as_ref().unwrap().set_filters(&[filter]).map_err(|err| err.to_string())?;  // Apply the filter to our interface
     // Read 100 frames to populate feedbacks - this prevents the run loop from thinking motors aren't initialized
     for _ in 1..100 {
-        match gm6020_can.as_mut().socket.as_ref().unwrap().read_frame(){
+        match gm6020_can.as_mut().socket.as_ref().unwrap().read_frame_timeout(Duration::from_millis(10)){
             Ok(CanFrame::Data(frame)) => rx_fb(gm6020_can.as_mut(), frame),
             Ok(CanFrame::Remote(frame)) => eprintln!("{:?}", frame),
             Ok(CanFrame::Error(frame)) => eprintln!("{:?}", frame),
-            Err(err) => eprintln!("{}", err),
+            Err(err) => if err.to_string() == "timed out" {return Err(String::from("Error: timed out waiting for initial connection to motor"))} else {eprintln!("{}", err)},
         };
     }
     return Ok(gm6020_can);
