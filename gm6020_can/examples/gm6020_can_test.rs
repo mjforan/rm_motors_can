@@ -8,7 +8,7 @@ use ctrlc;
 // Example showing how to use gm6020_can library.
 //////
 /*
-cargo run --release --example gm6020_can_test
+cargo run --example gm6020_can_test
 */
 
 const INC: u64 = 10;                              // Time (ms) between commands in the for loops
@@ -42,7 +42,7 @@ fn main() {
         // stop the other threads
         shared_stop_ref3.store(true, Ordering::Relaxed);
         // gently turn off the motors
-        gm6020_can::cleanup(gmc_ref3.clone(), 5);
+        gm6020_can::cleanup(gmc_ref3.clone(), 5).map_or_else(|e| eprintln!("{}", e), |_| ());
         shared_final_ref2.store(true, Ordering::Relaxed);
     });
 
@@ -92,7 +92,7 @@ fn main() {
 
 // Print out a simple bar chart of feedback values
 fn print_output(gm6020_can: Arc<Gm6020Can>) {
-    let val = gm6020_can::get_state(gm6020_can, ID, FB_FIELD);
+    let val = gm6020_can::get_state(gm6020_can, ID, FB_FIELD).unwrap();
     println!("{:#<1$}", "", match FB_FIELD {
         FbField::Position    => (val*5f64) as usize,
         FbField::Velocity    => val.abs() as usize,

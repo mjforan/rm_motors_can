@@ -14,7 +14,7 @@
 //////
 // Basic C++ example showing how to use gm6020_can library. Corresponds to gm6020_can/examples/gm6020_can_test.rs
 //////
-// cargo run --release --example gm6020_can_test
+// cargo run --example gm6020_can_test_cpp
 
 const unsigned int INC = 10;                                         // Time (ms) between commands in the for loops
 const int MAX = gm6020_can::V_MAX * 10;                              // Need the 10x multiplier so we can easily increment in for loops (can't increment floats).

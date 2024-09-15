@@ -8,4 +8,7 @@ parse_deps = true
 # but actually only this crate and the one dependency
 include = ["gm6020_can_cpp", "gm6020_can"]
 # and yes, I really do mean this one
-extra_bindings = ["gm60_x"]
+extra_bindings = ["gm6020_can"]
+# force cbindgen to expand macros (which generate the wrapper functions) before creating a header file.
+# this doesn't work, do manually in build.rs instead
+#expand = ["gm6020_can_cpp"]

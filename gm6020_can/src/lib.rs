@@ -106,8 +106,9 @@ pub fn init(interface: &str) -> Result<Arc<Gm6020Can>, String> {
 /*
 **  Clean up pointers and release the socket
 **  gm6020_can: 'handle' to act upon
+**  Doesn't really need to return anything but this is convenient for macros since all the functions return a result.
 */
-pub fn cleanup(gm6020_can: Arc<Gm6020Can>, period_ms: u64){
+pub fn cleanup(gm6020_can: Arc<Gm6020Can>, period_ms: u64) -> Result<i32, String> {
     // Ramp down commands to avoid jerking stop
     let mut threads: Vec<thread::JoinHandle<()>> = Vec::new();
     for i in 0 .. ARR_LEN {
@@ -139,12 +140,13 @@ pub fn cleanup(gm6020_can: Arc<Gm6020Can>, period_ms: u64){
     for thread in threads.into_iter() {
         thread.join().expect("Couldn't join the cleanup thread");
     }
+    Ok(0)
 }
 
 
 
 
-pub fn run_once(gm6020_can: Arc<Gm6020Can>) -> Result<(), String>{
+pub fn run_once(gm6020_can: Arc<Gm6020Can>) -> Result<i32, String>{
     // TODO maybe do one .read().unwrap() on modes, feedbacks for the whole function scope
     rx_fb(gm6020_can.clone())?;
 
@@ -163,7 +165,7 @@ pub fn run_once(gm6020_can: Arc<Gm6020Can>) -> Result<(), String>{
         };
     }
     // Send the commands, accumulating the results to return
-    let mut r: Result<(), String> = Ok(());
+    let mut r: Result<i32, String> = Ok(0);
     if v_l {r = r.and_then(|_| tx_cmd(gm6020_can.clone(), IdRange::Low,  CmdMode::Voltage));}
     if v_h {r = r.and_then(|_| tx_cmd(gm6020_can.clone(), IdRange::High, CmdMode::Voltage));}
     if i_l {r = r.and_then(|_| tx_cmd(gm6020_can.clone(), IdRange::Low,  CmdMode::Current));}
@@ -172,7 +174,7 @@ pub fn run_once(gm6020_can: Arc<Gm6020Can>) -> Result<(), String>{
 }
 
 
-pub fn set_cmd(gm6020_can: Arc<Gm6020Can>, id: u8, mode: CmdMode, cmd: f64) -> Result<(), String> {
+pub fn set_cmd(gm6020_can: Arc<Gm6020Can>, id: u8, mode: CmdMode, cmd: f64) -> Result<i32, String> {
     // Check id range and convert to array index
     if id<ID_MIN || id>ID_MAX { return Err(format!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id)); }
     let idx = (id-1) as usize;
@@ -207,7 +209,7 @@ pub fn set_cmd(gm6020_can: Arc<Gm6020Can>, id: u8, mode: CmdMode, cmd: f64) -> R
         CmdMode::Current => (I_CMD_MAX*cmd/I_MAX) as i16,
         _ => panic!(),
     };
-    Ok(())
+    Ok(0)
 }
 
 /*
@@ -217,7 +219,7 @@ pub fn set_cmd(gm6020_can: Arc<Gm6020Can>, id: u8, mode: CmdMode, cmd: f64) -> R
 **  id_range: send to low [1,4] or high [5,7] motors
 **  mode: send voltage or current commands
 */
-fn tx_cmd(gm6020_can: Arc<Gm6020Can>, id_range: IdRange, mode: CmdMode) -> Result<(), String> {
+fn tx_cmd(gm6020_can: Arc<Gm6020Can>, id_range: IdRange, mode: CmdMode) -> Result<i32, String> {
     // Determine which CAN id to send based on the command mode and id range
     let id: u16 = match (mode, id_range) {
         (CmdMode::Voltage, IdRange::Low ) => CMD_ID_V_L,
@@ -236,7 +238,7 @@ fn tx_cmd(gm6020_can: Arc<Gm6020Can>, id_range: IdRange, mode: CmdMode) -> Resul
         .ok_or_else(|| Err::<CanFrame, String>("Failed to open socket".to_string())).unwrap();
     // Write the frame
     gm6020_can.socket.lock().unwrap().as_ref().ok_or_else(|| Err::<CanSocket, String>("Socket not initialized".to_string())).unwrap().write_frame(&frame).map_err(|err| err.to_string())?;
-    Ok(())
+    Ok(0)
 }
 
 
@@ -246,7 +248,7 @@ fn tx_cmd(gm6020_can: Arc<Gm6020Can>, id_range: IdRange, mode: CmdMode) -> Resul
 **  gm6020_can: the handle to update
 **  frame: the CAN frame to parse
 */
-fn rx_fb(gm6020_can: Arc<Gm6020Can>) -> Result<(), String> {
+fn rx_fb(gm6020_can: Arc<Gm6020Can>) -> Result<i32, String> {
     // If a motor is not Disabled did not report any feedback for 100ms, report an error
     for i in 0 .. ARR_LEN {
         if gm6020_can.modes.read().unwrap()[i] != CmdMode::Disabled && gm6020_can.feedbacks.read().unwrap()[i].0.ok_or_else(|| Err::<(), String>(format!("Motor {} never responded.", (i as u8)+ID_MIN))).unwrap().elapsed().map_err(|err| err.to_string())?.as_millis() >= 100 {
@@ -280,15 +282,15 @@ fn rx_fb(gm6020_can: Arc<Gm6020Can>) -> Result<(), String> {
             },
         };
     }
-    Ok(())
+    Ok(0)
 }
 
 
-pub fn get_state(gm6020_can: Arc<Gm6020Can>, id: u8, field: FbField) -> f64{
-    match field {
+pub fn get_state(gm6020_can: Arc<Gm6020Can>, id: u8, field: FbField) -> Result<f64, String>{
+    Ok(match field {
         FbField::Position    => gm6020_can.feedbacks.read().unwrap()[(id-1)as usize].1.position as f64/POS_MAX as f64 *2f64*PI,
         FbField::Velocity    => gm6020_can.feedbacks.read().unwrap()[(id-1)as usize].1.velocity as f64/RPM_PER_ANGULAR,
         FbField::Current     => gm6020_can.feedbacks.read().unwrap()[(id-1)as usize].1.current as f64/1000f64/I_FB_MAX,
         FbField::Temperature => gm6020_can.feedbacks.read().unwrap()[(id-1)as usize].1.temperature as f64,
-    }
+    })
 }

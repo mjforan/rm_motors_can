@@ -15,6 +15,7 @@ gm6020_can = { path = "gm6020_can" }
 [build-dependencies]
 cbindgen = "0.26.0"
 cc = "1.1.18"
+cargo-expand = "1.0.90" # TODO make sure this is not ignored
 
 [dev-dependencies]
 ctrlc = "3.4"
@@ -26,5 +27,5 @@ crate-type = ["staticlib", "cdylib", "lib"]
 
 
 [[example]]
-name = "gm6020_can_test"
+name = "gm6020_can_test_cpp"
 
