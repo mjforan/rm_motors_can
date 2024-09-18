@@ -16,7 +16,7 @@ I also wrote a ROS 2 wrapper over this library, which enables advanced control i
 The GM6020 motor should be accessible via a SocketCAN interface. This can be accomplished with a USB CAN adapter, Raspberry Pi HAT, or a computer with a built-in CAN interface like an NVIDIA Orin. Don't forget to power the motor with 24V, configure CAN termination resistors, and set the motor ID; by default they come with ID 0, which is invalid.
 
 # Build
-TODO I'm not sure why, but building in debug takes forever (I'm actually not sure if it ever finishes)
+TODO I'm not sure why, but building stalls at the `cargo expand` step if it is not in `--release` mode.
 ```
 cargo install cargo-expand
 cargo build --release
