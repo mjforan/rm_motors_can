@@ -37,6 +37,7 @@ target/
 include/
 Cargo.lock
 main
+src/expanded.rs
 
 .vscode
 

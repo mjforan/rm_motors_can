@@ -1,6 +1,6 @@
 language = "C++"
 namespace = "gm6020_can"
-include_guard = "GM6020_CAN_H"
+include_guard = "GM6020_CAN_HPP"
 
 [parse]
 # generate bindings for dependencies

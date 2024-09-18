@@ -15,7 +15,7 @@ gm6020_can = { path = "gm6020_can" }
 [build-dependencies]
 cbindgen = "0.26.0"
 cc = "1.1.18"
-cargo-expand = "1.0.90" # TODO make sure this is not ignored
+# cargo-expand
 
 [dev-dependencies]
 ctrlc = "3.4"

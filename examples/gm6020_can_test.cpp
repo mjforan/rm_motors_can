@@ -1,6 +1,6 @@
 #include <iostream>
 
-#include "../include/gm6020_can.h"
+#include "../include/gm6020_can.hpp"
 #include <stdio.h>
 #include <thread>
 #include <chrono>
@@ -20,6 +20,7 @@ const unsigned int INC = 10;                                         // Time (ms
 const int MAX = gm6020_can::V_MAX * 10;                              // Need the 10x multiplier so we can easily increment in for loops (can't increment floats).
 const int ID = 1;                                                    // Motor ID [1,7]
 const gm6020_can::FbField FB_FIELD = gm6020_can::FbField::Velocity;  // The feedback value to visualize
+const char* CAN_INTERFACE = "can0";                                  // SocketCAN interface to open
 
 // To match the Rust example we would use something like this:
 //   std::shared_ptr<std::atomic_bool> shared_final = std::make_shared<std::atomic_bool>(std::atomic_bool(false));
@@ -31,7 +32,7 @@ void print_output(gm6020_can::Gm6020Can* gm6020_can);
 
 extern "C" int gm6020_can_test_cpp() {
     // Open SocketCAN device
-    gmc = gm6020_can::init("can0");
+    gmc = gm6020_can::init(CAN_INTERFACE);
     if (gmc == nullptr){
         std::cerr<<"Unable to open specified SocketCAN device"<<std::endl;
         return -1;

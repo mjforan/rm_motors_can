@@ -11,14 +11,15 @@ use ctrlc;
 cargo run --example gm6020_can_test
 */
 
-const INC: u64 = 10;                              // Time (ms) between commands in the for loops
-const MAX: i16 = (gm6020_can::V_MAX)as i16 * 10;  // Need the 10x multiplier so we can easily increment in for loops (can't increment floats).
-const ID: u8 = 1;                                 // Motor ID [1,7]
-const FB_FIELD: FbField = FbField::Velocity;      // The feedback value to visualize
+const INC: u64 = 10;                               // Time (ms) between commands in the for loops
+const MAX: i16 = (gm6020_can::V_MAX) as i16 * 10;  // Need the 10x multiplier so we can easily increment in for loops (can't increment floats).
+const ID: u8 = 1;                                  // Motor ID [1,7]
+const FB_FIELD: FbField = FbField::Velocity;       // The feedback value to visualize
+const CAN_INTERFACE: &str = "can0";                // SocketCAN interface to open
 
 fn main() {
     // Open SocketCAN device
-    let gmc: Arc<Gm6020Can> = gm6020_can::init("can0").unwrap();
+    let gmc: Arc<Gm6020Can> = gm6020_can::init(CAN_INTERFACE).unwrap();
     
     // Atomic flag to trigger stopping the threads
     let shared_stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
