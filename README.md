@@ -2,12 +2,9 @@
 This Rust library controls a DJI GM6020 motor over a Linux SocketCAN interface. Why Rust? I wanted to try something new and Rust seems like a good skill to have in 2024. Feel free to give feedback on my code by submitting an issue or PR.
 
 # `gm6020_can_cpp`
-This library provides a C/C++ wrapper over `gm6020_can`. A static library and dynamic library is created in the target directory, and header files are automatically generated
-in the include directory. A neat way to include this in your C++ program is to use Corrosion, which will automatically build the Rust crate and create a CMake target to link against.
+This library provides a C/C++ wrapper over `gm6020_can`. Static and dynamic libraries are created in the target directory and header files are generated in the include directory. A neat way to include this in your C++ program is to use Corrosion, which will automatically build the Rust crate and create a CMake target to link against.
 
-Note, the library which does the header generation does [not yet handle fully-qualified C function names](https://github.com/mozilla/cbindgen/issues/380).
-Since this library exposes common function names like 'init', I recommend you manually edit the header and prefix them all with 'gm6020_can'.
-TODO call a system command to do this in build.rs
+Unfortunately the C header does not contain "fully-qualified" names. Ideally each name would be prefixed with `gm6020_can_` to avoid conflict of common names like `init`. It is easy enough to generate these name prefixes in the header file but then they do not link to the Rust library. There is some ongoing work in the `cbindgen` tool to address this. If it is an issue for your project, change the function names in Rust and uncomment the `[export]` block in [`cbindgen_c.toml`](cbindgen_c.toml) to prefix all other items.
 
 # [`gm6020_ros`](https://github.com/mjforan/gm6020_ros/)
 I also wrote a ROS 2 wrapper over this library, which enables advanced control interfaces such as `ros2_control` and `MoveIt`. Talk about layers of abstraction! This repo also has an example hardware setup and `CMakeLists.txt`.
@@ -26,15 +23,17 @@ cargo build --release
 By default the examples connect to a motor on `can0` with ID `1`. They command the motor in `voltage` mode and display `velocity` values.
 These choices are set as constants at the top of the examples and may need to be changed to work with your system.
 
-### [C++ example](examples/gm6020_can_test_cpp.rs)
-```
-cargo run --release --example gm6020_can_test_cpp
-```
-
 ### [Rust example](gm6020_can/examples/gm6020_can_test.rs)
 ```
 cd gm6020_can
 cargo run --release --example gm6020_can_test
 ```
 
-TODO gif of example running
+### [C++ example](examples/gm6020_can_test_cpp.rs)
+```
+cargo run --release --example gm6020_can_test_cpp
+```
+
+
+
+![gm6020_can_test_cpp](gm6020_can_test_cpp.gif)

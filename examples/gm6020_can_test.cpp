@@ -10,6 +10,7 @@
 #include <atomic>
 #include <memory>
 #include <signal.h>
+#include <vector>
 
 //////
 // Basic C++ example showing how to use gm6020_can library. Corresponds to gm6020_can/examples/gm6020_can_test.rs
@@ -24,7 +25,7 @@ const char* CAN_INTERFACE = "can0";                                  // SocketCA
 
 // To match the Rust example we would use something like this:
 //   std::shared_ptr<std::atomic_bool> shared_final = std::make_shared<std::atomic_bool>(std::atomic_bool(false));
-// but in C++ it is not possible to pass additional variables to the signal handler. So we must use global variables.
+// but in C++ it is not possible to pass additional variables to the signal handler so we must use global variables.
 std::atomic_bool shared_stop = false;
 std::atomic_bool shared_final = false;
 gm6020_can::Gm6020Can* gmc = nullptr;
@@ -37,28 +38,35 @@ extern "C" int gm6020_can_test_cpp() {
         std::cerr<<"Unable to open specified SocketCAN device"<<std::endl;
         return -1;
     }
+    std::vector<std::thread> threads;
 
-    // TODO join all threads
-    std::thread thread_out([](){
+    threads.emplace_back(std::thread([](){
         while (! shared_stop.load()){
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             print_output(gmc);
         }
-    });
+    }));
 
+    // Set up a signal handler to clean up (not strictly necessary but good practice)
     signal (SIGINT, [](int){
+        // stop the other threads
         shared_stop.store(true);
-        if (gmc != nullptr)
-            gm6020_can::cleanup(gmc, 5);
+        // gently turn off the motors
+        gm6020_can::cleanup(gmc, 5);
+        // stop this thread
         shared_final.store(true);
     });
-    // Start another thread to collect feedback values
-    std::thread thread_run([](){
+
+    // Start another thread to periodically collect feedbacks and write commands
+    // It's better to run_once() after every set_cmd to minimize delay before writing,
+    // but if this loop is fast enough it will not be noticeable. This approach has the advantage of
+    // running consistently, which prevents the socket buffer from filling up in case e.g. the main thread is blocked.
+    threads.emplace_back(std::thread([](){
         while (!shared_stop.load()) {
             gm6020_can::run_once(gmc);
             std::this_thread::sleep_for(std::chrono::milliseconds(INC));
         }
-    });
+    }));
 
     // Ramp up, ramp down, ramp up (negative), ramp down (negative)
     for (int voltage = 0; voltage <= MAX; voltage += 2) {
@@ -82,11 +90,16 @@ extern "C" int gm6020_can_test_cpp() {
         std::this_thread::sleep_for (std::chrono::milliseconds(INC));
     }
 
-    // Send constant voltage command and read out position feedback
+    // Send one last voltage command
     gm6020_can::set_cmd(gmc, ID, gm6020_can::CmdMode::Voltage, 2.0);
+    // Wait for the ctl-c handler to finish cleaning up
     while (! shared_final.load()){
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+
+    // Join all threads so it doesn't complain about unfinished business
+    for (std::thread & thread : threads)
+        thread.join();
 
     return 0;
 }
@@ -94,21 +107,22 @@ extern "C" int gm6020_can_test_cpp() {
 // Print out a simple bar chart of feedback values
 void print_output(gm6020_can::Gm6020Can* gm6020_can) {
     double val = gm6020_can::get_state(gm6020_can, ID, FB_FIELD);
-    std::cout<<std::fixed<<std::setprecision(3)<<val<<"\t";
+     // Right justify, 7 wide, 2 decimal digits
+    std::cout<<std::fixed<<std::setprecision(2)<<std::right<<std::setw(7)<<val<<std::left<<std::setw(0)<<"\t";
     unsigned int n = 0;
     switch (FB_FIELD) {
         case gm6020_can::FbField::Position:
-        n = val*5.0;
-        break;
+            n = val*5.0;
+            break;
         case gm6020_can::FbField::Velocity:
-        n = abs(val);
-        break;
+            n = abs(val);
+            break;
         case gm6020_can::FbField::Current:
-        n = abs(val)*10.0;
-        break;
+            n = abs(val)*10.0;
+            break;
         case gm6020_can::FbField::Temperature:
-        n = val;
-        break;
+            n = val;
+            break;
     }
     std::cout<<std::string(n, '#')<<std::endl;
 }

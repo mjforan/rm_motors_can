@@ -44,6 +44,7 @@ fn main() {
         shared_stop_ref3.store(true, Ordering::Relaxed);
         // gently turn off the motors
         gm6020_can::cleanup(gmc_ref3.clone(), 5).map_or_else(|e| eprintln!("{}", e), |_| ());
+        // stop this thread
         shared_final_ref2.store(true, Ordering::Relaxed);
     });
 
@@ -82,9 +83,8 @@ fn main() {
         thread::sleep(std::time::Duration::from_millis(INC));
     }
 
-    // Send constant voltage command
+    // Send one last voltage command
     gm6020_can::set_cmd(gmc.clone(), ID, CmdMode::Voltage, 2f64).map_or_else(|e| eprintln!("{}", e), |_| ());
-    
     // Wait for the ctl-c handler to finish cleaning up
     while ! shared_final.load(Ordering::Relaxed){
         thread::sleep(std::time::Duration::from_millis(50));
@@ -94,6 +94,7 @@ fn main() {
 // Print out a simple bar chart of feedback values
 fn print_output(gm6020_can: Arc<Gm6020Can>) {
     let val = gm6020_can::get_state(gm6020_can, ID, FB_FIELD).unwrap();
+    print!("{val:>7.2}\t"); // Right justify, 7 wide, 2 decimal digits
     println!("{:#<1$}", "", match FB_FIELD {
         FbField::Position    => (val*5f64) as usize,
         FbField::Velocity    => val.abs() as usize,
