@@ -36,4 +36,4 @@ cargo run --release --example gm6020_can_test_cpp
 
 
 
-![gm6020_can_test_cpp](gm6020_can_test_cpp.gif)
+<img src="gm6020_can_test_cpp.gif" alt="gm6020_can_test_cpp"  loop=infinite>
