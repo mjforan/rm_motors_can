@@ -35,7 +35,7 @@ extern "C" int gm6020_can_test_cpp() {
     // Open SocketCAN device
     gmc = gm6020_can::init(CAN_INTERFACE);
     if (gmc == nullptr){
-        std::cerr<<"Unable to open specified SocketCAN device"<<std::endl;
+        std::cerr<<"Error in initialization"<<std::endl;
         return -1;
     }
     std::vector<std::thread> threads;
@@ -118,7 +118,7 @@ void print_output(gm6020_can::Gm6020Can* gm6020_can) {
             n = abs(val);
             break;
         case gm6020_can::FbField::Current:
-            n = abs(val)*10.0;
+            n = abs(val*10.0);
             break;
         case gm6020_can::FbField::Temperature:
             n = val;

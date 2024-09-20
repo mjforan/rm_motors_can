@@ -5,9 +5,6 @@ use std::os::raw::c_char;
 use std::ptr::null;
 use std::sync::Arc;
 
-// TODO handle CAN no buffer left
-// TODO try to reduce panics and handle errors more gracefully
-
 /*
 **  interface: SocketCAN interface name e.g. "can0"
 **  returns: pointer to Gm6020Can struct, to be passed to other functions in this library
@@ -53,6 +50,7 @@ generate_wrapper!(cleanup,   (period_ms: u64), i32);
 generate_wrapper!(run_once,  (), i32);
 generate_wrapper!(set_cmd,   (id: u8, mode: CmdMode, cmd: f64), i32);
 generate_wrapper!(get_state, (id: u8, field: FbField), f64);
+
 
 #[link(name = "gm6020_can_test_cpp")]
 extern { fn gm6020_can_test_cpp() -> i32; }
