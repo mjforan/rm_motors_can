@@ -33,11 +33,17 @@ void print_output(gm6020_can::Gm6020Can* gm6020_can);
 
 extern "C" int gm6020_can_test_cpp() {
     // Open SocketCAN device
-    gmc = gm6020_can::init(CAN_INTERFACE);
+    gmc = gm6020_can::init_bus(CAN_INTERFACE);
     if (gmc == nullptr){
         std::cerr<<"Error in initialization"<<std::endl;
         return -1;
     }
+    // Set up the motor
+    if (gm6020_can::init_motor(gmc, ID, gm6020_can::MotorType::GM6020, gm6020_can::CmdMode::Voltage)<0){
+        std::cerr<<"Error initializing motor "<<ID<<std::endl;
+        return -1;
+    }
+
     std::vector<std::thread> threads;
 
     threads.emplace_back(std::thread([](){
@@ -71,27 +77,27 @@ extern "C" int gm6020_can_test_cpp() {
     // Ramp up, ramp down, ramp up (negative), ramp down (negative)
     for (int voltage = 0; voltage <= MAX; voltage += 2) {
         if (shared_stop.load()) break; // Check if the ctl-c handler was called
-        gm6020_can::set_cmd(gmc, ID, gm6020_can::CmdMode::Voltage, voltage / 10.0);
+        gm6020_can::set_cmd(gmc, ID, voltage / 10.0);
         std::this_thread::sleep_for (std::chrono::milliseconds(INC));
     }
     for (int voltage = MAX; voltage > 0; voltage -= 2) {
         if (shared_stop.load()) break; // Check if the ctl-c handler was called
-        gm6020_can::set_cmd(gmc, ID, gm6020_can::CmdMode::Voltage, voltage / 10.0);
+        gm6020_can::set_cmd(gmc, ID, voltage / 10.0);
         std::this_thread::sleep_for (std::chrono::milliseconds(INC));
     }
     for (int voltage = 0; voltage >= -1*MAX; voltage -=2) {
         if (shared_stop.load()) break; // Check if the ctl-c handler was called
-        gm6020_can::set_cmd(gmc, ID, gm6020_can::CmdMode::Voltage, voltage / 10.0);
+        gm6020_can::set_cmd(gmc, ID, voltage / 10.0);
         std::this_thread::sleep_for (std::chrono::milliseconds(INC));
     }
     for (int voltage = -1*MAX+1; voltage < 1; voltage += 2) {
         if (shared_stop.load()) break; // Check if the ctl-c handler was called
-        gm6020_can::set_cmd(gmc, ID, gm6020_can::CmdMode::Voltage, voltage / 10.0);
+        gm6020_can::set_cmd(gmc, ID, voltage / 10.0);
         std::this_thread::sleep_for (std::chrono::milliseconds(INC));
     }
 
     // Send one last voltage command
-    gm6020_can::set_cmd(gmc, ID, gm6020_can::CmdMode::Voltage, 2.0);
+    gm6020_can::set_cmd(gmc, ID, 2.0);
     // Wait for the ctl-c handler to finish cleaning up
     while (! shared_final.load()){
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
