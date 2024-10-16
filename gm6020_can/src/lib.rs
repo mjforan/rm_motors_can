@@ -31,14 +31,16 @@ pub fn rpm_per_v(motor_type: MotorType) -> f64 {
     }
 }
 // Amps ("torque current")
-pub fn i_max(motor_type: MotorType) -> f64{
+#[no_mangle]
+pub extern "C" fn i_max(motor_type: MotorType) -> f64{
     match motor_type {
         MotorType::GM6020 => 1.62,
         MotorType::M3508  => 20.0,
         MotorType::M2006  => 10.0,
     }
 }
-pub fn nm_per_a(motor_type: MotorType) -> f64 {
+#[no_mangle]
+pub extern "C" fn nm_per_a(motor_type: MotorType) -> f64 {
     match motor_type {
         MotorType::GM6020 => 0.741,
         MotorType::M3508  => 0.353, // approximated from datasheet graph
@@ -49,7 +51,8 @@ pub const V_MAX      : f64 =  24.0;  // Volts DC
 pub const TEMP_MAX   : u8  = 125;    // C
 const V_CMD_MAX: f64 = 25000.0;     // V_MAX maps to V_CMD_MAX in the CAN messages
 // I_MAX maps to I_CMD_MAX in the CAN messages
-pub fn i_cmd_max(motor_type: MotorType) -> f64 {
+#[no_mangle]
+pub extern "C" fn i_cmd_max(motor_type: MotorType) -> f64 {
     match motor_type {
         MotorType::GM6020 => 16384.0,
         MotorType::M3508  => 16384.0,
