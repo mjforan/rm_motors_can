@@ -10,7 +10,7 @@ use std::sync::Arc;
 **  returns: pointer to Gm6020Can struct, to be passed to other functions in this library
 */
 #[no_mangle]
-pub extern "C" fn init(interface: *const c_char) -> *mut Gm6020Can {
+pub extern "C" fn init_bus(interface: *const c_char) -> *mut Gm6020Can {
     let inter: &str;
     if interface.is_null() {
         println!("Invalid c-string received for interface name (null pointer)");
@@ -26,7 +26,7 @@ pub extern "C" fn init(interface: *const c_char) -> *mut Gm6020Can {
             inter = r.unwrap();
         }
     }
-    gm6020_can::init(inter).map_or_else(|e| {eprintln!("{}", e); null::<Gm6020Can>() as *const Gm6020Can}, |v| Arc::into_raw(v)) as *mut Gm6020Can
+    gm6020_can::init_bus(inter).map_or_else(|e| {eprintln!("{}", e); null::<Gm6020Can>() as *const Gm6020Can}, |v| Arc::into_raw(v)) as *mut Gm6020Can
 }
 
 macro_rules! generate_wrapper {
@@ -46,10 +46,11 @@ macro_rules! generate_wrapper {
     };
 }
 
-generate_wrapper!(cleanup,   (period_ms: u64), i32);
-generate_wrapper!(run_once,  (), i32);
-generate_wrapper!(set_cmd,   (id: u8, mode: CmdMode, cmd: f64), i32);
-generate_wrapper!(get_state, (id: u8, field: FbField), f64);
+generate_wrapper!(init_motor, (id: u8, motor_type: MotorType, mode: CmdMode), i32);
+generate_wrapper!(cleanup,    (period_ms: u64), i32);
+generate_wrapper!(run_once,   (), i32);
+generate_wrapper!(set_cmd,    (id: u8, cmd: f64), i32);
+generate_wrapper!(get_state,  (id: u8, field: FbField), f64);
 
 
 #[link(name = "gm6020_can_test_cpp")]

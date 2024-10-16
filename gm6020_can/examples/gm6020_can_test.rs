@@ -1,4 +1,4 @@
-use gm6020_can::{CmdMode, FbField, Gm6020Can};
+use gm6020_can::{CmdMode, FbField, Gm6020Can, MotorType};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::sync::Arc;
@@ -19,8 +19,10 @@ const CAN_INTERFACE: &str = "can0";                // SocketCAN interface to ope
 
 fn main() {
     // Open SocketCAN device
-    let gmc: Arc<Gm6020Can> = gm6020_can::init(CAN_INTERFACE).unwrap();
-    
+    let gmc: Arc<Gm6020Can> = gm6020_can::init_bus(CAN_INTERFACE).unwrap();
+    // Set up the motor
+    gm6020_can::init_motor(gmc.clone(), ID, MotorType::GM6020, CmdMode::Voltage).map_or_else(|e| panic!("{}", e), |_| ());
+
     // Atomic flag to trigger stopping the threads
     let shared_stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
@@ -64,27 +66,27 @@ fn main() {
     // Ramp up, ramp down, ramp up (negative), ramp down (negative)
     for voltage in (0 .. MAX+1).step_by(2) {
         if shared_stop.load(Ordering::Relaxed) {break;} // Check if the ctl-c handler was called
-        gm6020_can::set_cmd(gmc.clone(), ID, CmdMode::Voltage, voltage as f64 / 10f64).map_or_else(|e| eprintln!("{}", e), |_| ());
+        gm6020_can::set_cmd(gmc.clone(), ID, voltage as f64 / 10f64).map_or_else(|e| eprintln!("{}", e), |_| ());
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     for voltage in (0 .. MAX).rev().step_by(2) {
         if shared_stop.load(Ordering::Relaxed) {break;} // Check if the ctl-c handler was called
-        gm6020_can::set_cmd(gmc.clone(), ID, CmdMode::Voltage, voltage as f64 / 10f64).map_or_else(|e| eprintln!("{}", e), |_| ());
+        gm6020_can::set_cmd(gmc.clone(), ID, voltage as f64 / 10f64).map_or_else(|e| eprintln!("{}", e), |_| ());
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     for voltage in (-1*MAX .. 0).rev().step_by(2) {
         if shared_stop.load(Ordering::Relaxed) {break;} // Check if the ctl-c handler was called
-        gm6020_can::set_cmd(gmc.clone(), ID, CmdMode::Voltage, voltage as f64 / 10f64).map_or_else(|e| eprintln!("{}", e), |_| ());
+        gm6020_can::set_cmd(gmc.clone(), ID, voltage as f64 / 10f64).map_or_else(|e| eprintln!("{}", e), |_| ());
         thread::sleep(std::time::Duration::from_millis(INC));
     }
     for voltage in (-1*MAX+1 .. 1).step_by(2) {
         if shared_stop.load(Ordering::Relaxed) {break;} // Check if the ctl-c handler was called
-        gm6020_can::set_cmd(gmc.clone(), ID, CmdMode::Voltage, voltage as f64 / 10f64).map_or_else(|e| eprintln!("{}", e), |_| ());
+        gm6020_can::set_cmd(gmc.clone(), ID, voltage as f64 / 10f64).map_or_else(|e| eprintln!("{}", e), |_| ());
         thread::sleep(std::time::Duration::from_millis(INC));
     }
 
     // Send one last voltage command
-    gm6020_can::set_cmd(gmc.clone(), ID, CmdMode::Voltage, 2f64).map_or_else(|e| eprintln!("{}", e), |_| ());
+    gm6020_can::set_cmd(gmc.clone(), ID, 2f64).map_or_else(|e| eprintln!("{}", e), |_| ());
     // Wait for the ctl-c handler to finish cleaning up
     while ! shared_final.load(Ordering::Relaxed){
         thread::sleep(std::time::Duration::from_millis(50));
