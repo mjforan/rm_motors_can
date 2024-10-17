@@ -278,14 +278,17 @@ pub fn run_once(gm6020_can: Arc<Gm6020Can>) -> Result<i32, String>{
             CmdMode::Velocity => CmdMode::Voltage,
             CmdMode::Disabled => CmdMode::Disabled,
         };
+        if mode == CmdMode::Disabled {
+            continue;
+        }
         r = r.and_then(
             |_| match (mode, IdRange::from_u8(i as u8 + ID_MIN), gm6020_can.motor_types.read().unwrap()[i]) {
                 (CmdMode::Voltage, IdRange::Low , MotorType::GM6020) => tx_cmd(gm6020_can.clone(), CMD_ID_V_L_6020, IdRange::Low),
                 (CmdMode::Voltage, IdRange::High, MotorType::GM6020) => tx_cmd(gm6020_can.clone(), CMD_ID_V_H_6020, IdRange::High),
                 (CmdMode::Current, IdRange::Low , MotorType::GM6020) => tx_cmd(gm6020_can.clone(), CMD_ID_I_L_6020, IdRange::Low),
+                (CmdMode::Current, IdRange::High, MotorType::GM6020) => tx_cmd(gm6020_can.clone(), CMD_ID_I_H_6020, IdRange::High),
                 (CmdMode::Current, IdRange::Low , MotorType::M3508 ) => tx_cmd(gm6020_can.clone(), CMD_ID_I_L_3508, IdRange::Low),
                 (CmdMode::Current, IdRange::Low , MotorType::M2006 ) => tx_cmd(gm6020_can.clone(), CMD_ID_I_L_2006, IdRange::Low),
-                (CmdMode::Current, IdRange::High, MotorType::GM6020) => tx_cmd(gm6020_can.clone(), CMD_ID_I_H_6020, IdRange::High),
                 (CmdMode::Current, IdRange::High, MotorType::M3508 ) => tx_cmd(gm6020_can.clone(), CMD_ID_I_H_3508, IdRange::High),
                 (CmdMode::Current, IdRange::High, MotorType::M2006 ) => tx_cmd(gm6020_can.clone(), CMD_ID_I_H_2006, IdRange::High),
                 (_, _, _) => Err(format!("Unknown combination of CmdMode, IdRange, MotorType in run_once")),
@@ -304,20 +307,26 @@ pub fn set_cmd(gm6020_can: Arc<Gm6020Can>, id: u8, cmd: f64) -> Result<i32, Stri
     // If the motor is too hot, write 0 command and return error
     // TODO what to do about m3508, m2006?
     if gm6020_can.feedbacks.read().unwrap()[idx].1.temperature >= TEMP_MAX as u16 { gm6020_can.commands.write().unwrap()[idx] = 0; return Err(format!("temperature overload [{}]: {}", TEMP_MAX, gm6020_can.feedbacks.read().unwrap()[idx].1.temperature));}
-    let mode: CmdMode = gm6020_can.modes.read().unwrap()[idx];
+    let mut mode: CmdMode = gm6020_can.modes.read().unwrap()[idx];
     let motor_type: MotorType = gm6020_can.motor_types.read().unwrap()[idx];
     let mut cmd_actual: f64 = cmd;
     // Convert torque and velocity commands to corresponding current and voltage commands
-    if mode == CmdMode::Torque   {cmd_actual/=nm_per_a(motor_type);}
-    if mode == CmdMode::Velocity {cmd_actual*=RPM_PER_ANGULAR/rpm_per_v(motor_type);}
+    if mode == CmdMode::Torque {
+        mode = CmdMode::Current;
+        cmd_actual/=nm_per_a(motor_type);
+    }
+    if mode == CmdMode::Velocity {
+        mode = CmdMode::Voltage;
+        cmd_actual*=RPM_PER_ANGULAR/rpm_per_v(motor_type);
+    }
     // Limit to max allowable command values
-    if (mode == CmdMode::Voltage || mode == CmdMode::Velocity) && cmd_actual.abs() > V_MAX {
+    if mode == CmdMode::Voltage && cmd_actual.abs() > V_MAX {
         eprintln!("Warning: voltage out of range [{}, {}]: {}. Clamping.", -1.0*V_MAX, V_MAX, cmd);
         cmd_actual = V_MAX*cmd.abs()/cmd;
     }
     let i_max: f64 = i_max(motor_type);
 
-    if (mode == CmdMode::Current || mode == CmdMode::Torque) && cmd_actual.abs() > i_max {
+    if mode == CmdMode::Current && cmd_actual.abs() > i_max {
         eprintln!("Warning: current out of range [{}, {}]: {}. Clamping.", -1.0*i_max, i_max, cmd);
         cmd_actual = i_max*cmd.abs()/cmd;
     }
