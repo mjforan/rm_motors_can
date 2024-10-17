@@ -20,10 +20,18 @@ const CMD_ID_I_H_2006: u16 = CMD_ID_I_H_3508;
 
 
 pub const ID_MIN: u8 = 1;
-pub const ID_MAX: u8 = 7;
+#[no_mangle]
+pub extern "C" fn id_max(motor_type: MotorType) -> u8 {
+    match motor_type {
+        MotorType::GM6020 => 7,
+        MotorType::M3508  => 8,
+        MotorType::M2006  => 8,
+    }
+}
 const POS_MAX   : u16 = 8191;
 pub const RPM_PER_ANGULAR : f64 = 60.0/(2.0*3.14159);
-pub fn rpm_per_v(motor_type: MotorType) -> f64 {
+#[no_mangle]
+pub extern "C" fn rpm_per_v(motor_type: MotorType) -> f64 {
     match motor_type {
         MotorType::GM6020 => 13.33,
         MotorType::M3508  => 17.71,
@@ -32,7 +40,7 @@ pub fn rpm_per_v(motor_type: MotorType) -> f64 {
 }
 // Amps ("torque current")
 #[no_mangle]
-pub extern "C" fn i_max(motor_type: MotorType) -> f64{
+pub extern "C" fn i_max(motor_type: MotorType) -> f64 {
     match motor_type {
         MotorType::GM6020 => 1.62,
         MotorType::M3508  => 20.0,
@@ -121,7 +129,7 @@ struct Feedback {
     temperature: u16, // C
 }
 
-const ARR_LEN: usize = 8; // (ID_MAX-ID_MIN+1) as usize   only 7 slots will be used but 8 is convenient for tx_cmd (last item unused)
+const ARR_LEN: usize = 8;
 #[derive(Default)]
 #[repr(C)]
 pub struct Gm6020Can {
@@ -138,7 +146,7 @@ enum IdRange { Low, High }
 impl IdRange {
     fn from_u8(id: u8) -> IdRange {
         if id < ID_MIN || id > ARR_LEN as u8 {
-            panic!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id);
+            panic!("id out of range [{}, {}]: {}", ID_MIN, ARR_LEN, id);
         }
         if id >= 5 {
             IdRange::High
@@ -301,9 +309,10 @@ pub fn run_once(gm6020_can: Arc<Gm6020Can>) -> Result<i32, String>{
 
 
 pub fn set_cmd(gm6020_can: Arc<Gm6020Can>, id: u8, cmd: f64) -> Result<i32, String> {
-    // Check id range and convert to array index
-    if id<ID_MIN || id>ID_MAX { return Err(format!("id out of range [{}, {}]: {}", ID_MIN, ID_MAX, id)); }
+    // convert ID to array index
     let idx: usize = (id-1) as usize;
+    // Check id range
+    if id<ID_MIN || id>id_max(gm6020_can.motor_types.read().unwrap()[idx]) { return Err(format!("id out of range [{}, {}]: {}", ID_MIN, id_max(gm6020_can.motor_types.read().unwrap()[idx]), id)); }
     // If the motor is too hot, write 0 command and return error
     // TODO what to do about m3508, m2006?
     if gm6020_can.feedbacks.read().unwrap()[idx].1.temperature >= TEMP_MAX as u16 { gm6020_can.commands.write().unwrap()[idx] = 0; return Err(format!("temperature overload [{}]: {}", TEMP_MAX, gm6020_can.feedbacks.read().unwrap()[idx].1.temperature));}
