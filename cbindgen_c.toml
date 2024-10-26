@@ -1,16 +1,16 @@
 language = "C"
-include_guard = "GM6020_CAN_H"
+include_guard = "RM_MOTORS_CAN_H"
 
 #[export]
-#prefix="gm6020_can_"
+#prefix="rm_motors_can_"
 
 [parse]
 # generate bindings for dependencies
 parse_deps = true
 # but actually only this crate and the one dependency
-include = ["gm6020_can_cpp", "gm6020_can"]
+include = ["rm_motors_can_cpp", "rm_motors_can"]
 # and yes, I really do mean this one
-extra_bindings = ["gm6020_can"]
+extra_bindings = ["rm_motors_can"]
 # force cbindgen to expand macros (which generate the wrapper functions) before creating a header file.
 # this doesn't work, do manually in build.rs instead
-#expand = ["gm6020_can_cpp"]
+#expand = ["rm_motors_can_cpp"]

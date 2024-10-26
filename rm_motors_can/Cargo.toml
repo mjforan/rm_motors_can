@@ -1,13 +1,13 @@
 [package]
-name = "gm6020_can"
+name = "rm_motors_can"
 version = "0.1.0"
 edition = "2021"
 authors = [
     "Matthew Foran <matthewjforan@gmail.com>",
 ]
-repository = "https://github.com/mjforan/gm6020_can"
+repository = "https://github.com/mjforan/rm_motors_can"
 license = "MPL 2.0"
-description = "CAN bus control interface of RoboMaster GM6020 motor"
+description = "CAN bus control interface of RoboMaster motors"
 
 [dependencies]
 embedded-can = "0.4.1"
@@ -17,8 +17,8 @@ socketcan = "3.3.0"
 ctrlc = "3.4"
 
 [lib]
-name = "gm6020_can"
+name = "rm_motors_can"
 crate-type = ["lib"]
 
 [[example]]
-name = "gm6020_can_test"
+name = "rm_motors_can_test"
