@@ -5,8 +5,8 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-  println!("cargo:rerun-if-changed=include/gm6020_can.h");
-  println!("cargo:rerun-if-changed=include/gm6020_can.hpp");
+  println!("cargo:rerun-if-changed=include/rm_motors_can.h");
+  println!("cargo:rerun-if-changed=include/rm_motors_can.hpp");
 
   // Don't do any custom build steps if this is being run by our manual invocation of `cargo expand` (avoid infinite recursion)
   if env::var("CARGO_EXPAND").is_ok() {
@@ -38,7 +38,7 @@ fn main() {
     .with_config(config_c)
     .generate()
     .expect("Failed to generate C header")
-    .write_to_file("include/gm6020_can.h");
+    .write_to_file("include/rm_motors_can.h");
 
   cbindgen::Builder::new()
     .with_src((&crate_dir).join("src/expanded.rs"))
@@ -46,19 +46,19 @@ fn main() {
     .with_config(config_cpp)
     .generate()
     .expect("Failed to generate C++ header")
-    .write_to_file("include/gm6020_can.hpp");
+    .write_to_file("include/rm_motors_can.hpp");
 
 
   // TODO bug in cc where it is unable to link to system libraries for an example in a lib crate  https://github.com/rust-lang/cc-rs/issues/1206
   // Compile the C++ example
   // There is no good way to do this conditionally i.e. only when `cargo build --examples`
 
-  println!("cargo:rerun-if-changed=examples/gm6020_can_test.cpp");
+  println!("cargo:rerun-if-changed=examples/rm_motors_can_test.cpp");
   cc::Build::new()
   .cpp(true)
-  .file("examples/gm6020_can_test.cpp")
+  .file("examples/rm_motors_can_test.cpp")
   .cpp_link_stdlib("stdc++")
-  .compile("gm6020_can_test_cpp");
+  .compile("rm_motors_can_test_cpp");
 
   fs::remove_file("src/expanded.rs").expect("Unable to delete expanded lib.rs"); // Remove the temporary file
 }

@@ -1,4 +1,4 @@
-use gm6020_can::*;
+use rm_motors_can::*;
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -7,41 +7,41 @@ use std::sync::Arc;
 
 /*
 **  interface: SocketCAN interface name e.g. "can0"
-**  returns: pointer to Gm6020Can struct, to be passed to other functions in this library
+**  returns: pointer to RmMotorsCan struct, to be passed to other functions in this library
 */
 #[no_mangle]
-pub extern "C" fn init_bus(interface: *const c_char) -> *mut Gm6020Can {
+pub extern "C" fn init_bus(interface: *const c_char) -> *mut RmMotorsCan {
     let inter: &str;
     if interface.is_null() {
         println!("Invalid c-string received for interface name (null pointer)");
-        return null::<Gm6020Can>() as *mut Gm6020Can;
+        return null::<RmMotorsCan>() as *mut RmMotorsCan;
     }
     else {
         unsafe {
             let r = CStr::from_ptr(interface).to_str();
             if r.is_err() {
                 eprintln!("Invalid c-string received for interface name");
-                return null::<Gm6020Can>() as *mut Gm6020Can;
+                return null::<RmMotorsCan>() as *mut RmMotorsCan;
             }
             inter = r.unwrap();
         }
     }
-    gm6020_can::init_bus(inter).map_or_else(|e| {eprintln!("{}", e); null::<Gm6020Can>() as *const Gm6020Can}, |v| Arc::into_raw(v)) as *mut Gm6020Can
+    rm_motors_can::init_bus(inter).map_or_else(|e| {eprintln!("{}", e); null::<RmMotorsCan>() as *const RmMotorsCan}, |v| Arc::into_raw(v)) as *mut RmMotorsCan
 }
 
 macro_rules! generate_wrapper {
     ($func_name:ident, ($($param_name:ident: $param_type:ty),*), $return_type:ty) => {
         #[no_mangle]
-        pub extern "C" fn $func_name(gm6020_can: *mut Gm6020Can, $($param_name: $param_type),*) -> $return_type {
-            if gm6020_can.is_null(){
+        pub extern "C" fn $func_name(rm_motors_can: *mut RmMotorsCan, $($param_name: $param_type),*) -> $return_type {
+            if rm_motors_can.is_null(){
                 println!("Invalid handle (null pointer)");
                 return -1 as $return_type;
             }
 
-            let gm6020_can: Arc<Gm6020Can> = unsafe { Arc::from_raw(gm6020_can as *const Gm6020Can) }; // reconstitute the Arc temporarily to clone it
-            let gm6020_can_ref2 = Arc::clone(&gm6020_can);
-            std::mem::forget(gm6020_can); // "forget" the Arc to avoid dropping it (since C++ still needs to reuse it)
-            gm6020_can::$func_name(gm6020_can_ref2, $($param_name),*).map_or_else(|e| {eprintln!("{}", e); -1 as $return_type}, |v| v as $return_type)
+            let rm_motors_can: Arc<RmMotorsCan> = unsafe { Arc::from_raw(rm_motors_can as *const RmMotorsCan) }; // reconstitute the Arc temporarily to clone it
+            let rm_motors_can_ref2 = Arc::clone(&rm_motors_can);
+            std::mem::forget(rm_motors_can); // "forget" the Arc to avoid dropping it (since C++ still needs to reuse it)
+            rm_motors_can::$func_name(rm_motors_can_ref2, $($param_name),*).map_or_else(|e| {eprintln!("{}", e); -1 as $return_type}, |v| v as $return_type)
         }
     };
 }
@@ -53,9 +53,9 @@ generate_wrapper!(set_cmd,    (id: u8, cmd: f64), i32);
 generate_wrapper!(get_state,  (id: u8, field: FbField), f64);
 
 
-#[link(name = "gm6020_can_test_cpp")]
-extern { fn gm6020_can_test_cpp() -> i32; }
+#[link(name = "rm_motors_can_test_cpp")]
+extern { fn rm_motors_can_test_cpp() -> i32; }
 // TODO this is only here due to a bug in the cc crate preventing c++ in examples: https://github.com/rust-lang/cc-rs/issues/1206
 pub unsafe fn cpp_example(){
-    std::process::exit(gm6020_can_test_cpp());
+    std::process::exit(rm_motors_can_test_cpp());
 }

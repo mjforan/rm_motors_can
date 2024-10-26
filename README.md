@@ -1,7 +1,9 @@
-# `gm6020_can`
-This Rust library controls a DJI GM6020 motor over a Linux SocketCAN interface.
+# `rm_motors_can`
+This Rust library controls a DJI RoboMaster motors over a Linux SocketCAN interface.
 
-<img src="gm6020_can_test_cpp.gif" alt="gm6020_can_test_cpp"  loop=infinite>
+<img src="rm_motors_can_test_cpp.gif" alt="rm_motors_can_test_cpp"  loop=infinite>
+
+TODO update table with specs for other motors (currently just GM6020)
 
 <table>
 <tr><td>
@@ -33,18 +35,18 @@ Switching from Voltage/Velocity to Current/Torque modes requires changing parame
 Temperature is only reported in whole-number precision.
 
 
-# `gm6020_can_cpp`
-This library provides a C/C++ wrapper over `gm6020_can`. Static and dynamic libraries are created in the target directory and header files are generated in the include directory. A neat way to include this in your C++ program is to use Corrosion, which will automatically build the Rust crate and create a CMake target to link against.
+# `rm_motors_can_cpp`
+This library provides a C/C++ wrapper over `rm_motors_can`. Static and dynamic libraries are created in the target directory and header files are generated in the include directory. A neat way to include this in your C++ program is to use Corrosion, which will automatically build the Rust crate and create a CMake target to link against.
 
-Unfortunately the C header does not contain "fully-qualified" names. Ideally each name would be prefixed with `gm6020_can_` to avoid conflict of common names like `init`. There is some ongoing work in the `cbindgen` tool to address this. If it is an issue for your project, change the function names in Rust and uncomment the `[export]` block in [`cbindgen_c.toml`](cbindgen_c.toml) to prefix all other items.
+Unfortunately the C header does not contain "fully-qualified" names. Ideally each name would be prefixed with `rm_motors_can_` to avoid conflict of common names like `init`. There is some ongoing work in the `cbindgen` tool to address this. If it is an issue for your project, change the function names in Rust and uncomment the `[export]` block in [`cbindgen_c.toml`](cbindgen_c.toml) to prefix all other items.
 
 
-# [`gm6020_ros`](https://github.com/mjforan/gm6020_ros/)
+# [`rm_motors_ros`](https://github.com/mjforan/rm_motors_ros/)
 ROS 2 wrapper which enables advanced control interfaces such as `ros2_control` and `MoveIt`. Talk about layers of abstraction! This repo has an example hardware setup and `CMakeLists.txt`.
 
 
 # Hardware
-The GM6020 motor should be accessible via a SocketCAN interface. This can be accomplished with a USB CAN adapter, Raspberry Pi HAT, or built-in CAN interface like on an NVIDIA Orin. Don't forget to power the motor with 24V, configure CAN termination resistors, and set the motor ID; from the factory the ID is 0, which is invalid.
+The motor should be accessible via a SocketCAN interface. This can be accomplished with a USB CAN adapter, Raspberry Pi HAT, or built-in CAN interface like on an NVIDIA Orin. Don't forget to power the motor with 24V, configure CAN termination resistors, and set the motor ID; from the factory the ID is 0, which is invalid for GM6020.
 
 
 # Build
@@ -59,15 +61,15 @@ cargo build --release
 By default the examples connect to a motor on `can0` with ID `1`. They command the motor in `voltage` mode and display `velocity` values.
 These choices are set as constants at the top of the examples and may need to be changed to work with your system.
 
-### [Rust example](gm6020_can/examples/gm6020_can_test.rs)
+### [Rust example](rm_motors_can/examples/rm_motors_can_test.rs)
 ```
-cd gm6020_can
-cargo run --release --example gm6020_can_test
+cd rm_motors_can
+cargo run --release --example rm_motors_can_test
 ```
 
-### [C++ example](examples/gm6020_can_test_cpp.rs)
+### [C++ example](examples/rm_motors_can_test_cpp.rs)
 ```
-cargo run --release --example gm6020_can_test_cpp
+cargo run --release --example rm_motors_can_test_cpp
 ```
 
 
