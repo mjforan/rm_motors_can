@@ -1,5 +1,5 @@
 # `rm_motors_can`
-This Rust library controls a DJI RoboMaster motors over a Linux SocketCAN interface.
+This Rust library controls DJI RoboMaster motors over a Linux SocketCAN interface.
 
 <img src="rm_motors_can_test_cpp.gif" alt="rm_motors_can_test_cpp"  loop=infinite>
 
