@@ -3,32 +3,32 @@ This Rust library controls DJI RoboMaster motors over a Linux SocketCAN interfac
 
 <img src="rm_motors_can_test_cpp.gif" alt="rm_motors_can_test_cpp"  loop=infinite>
 
-TODO update table with specs for other motors (currently just GM6020)
-
 <table>
 <tr><td>
 
-| Control Mode | Max  | Units |
-|----------|------|-------|
-| Voltage  | 24   | V     |
-| Current  | 1.62 | A     |
-| Velocity | 33.5 | rad/s |
-| Torque   | 1.2  | N*m   |
+| Control Mode | Units | GM6020 | M3508 | M2006 |
+|----------|-------|------|-----|------|
+| Voltage  | V     | 24   |  24 |   24 |
+| Current  | A     | 1.62 |  20 |   10 |
+| Velocity | rad/s | 33.5 | 482 |  500 |
+| Torque   | N*m   | 1.2  |   5 | 1.75 |
 
 </td><td></td><td></td><td>
 
-| Feedback Field | Units |
-|-------------|-------|
-| Position    | rad   |
-| Velocity    | rad/s |
-| Current     | A     |
-| Temperature | °C    |
+| Feedback Field          | Units |
+|-------------------------|-------|
+| Position                | rad   |
+| Velocity                | rad/s |
+| Current (not M2006)     | A     |
+| Temperature (not M2006) | °C    |
 
 </td></tr></table>
 
-Note that "current" is actually "torque current", which is the portion of current in-phase with the voltage, i.e. how much current is generating useful torque. So while you command 1.62A, keep in mind the motor could be drawing over 3A.
+GM6020 "current" is actually "torque current", which is the portion of current in-phase with the voltage, i.e. how much current is generating useful torque. So while you command 1.62A, keep in mind the motor could be drawing over 3A.
 
-The velocity and torque commands are simply voltage and current commands scaled by constants given in the datasheet. These may not be accurate across the full range of running conditions. For better accuracy or position control your controller must utilize feedback from `get_state` - or consider using the PWM interface.
+The velocity and torque commands are simply voltage and current commands scaled by constants given in the datasheets. These may not be accurate across the full range of running conditions. For better accuracy or position control your controller must utilize feedback from `get_state` - or consider using the PWM interface.
+
+M3508 and M2006 only accept Current commands. The Voltage/Velocity numbers above are for reference only.
 
 Switching from Voltage/Velocity to Current/Torque modes requires changing parameters in RoboMaster Assistant.
 
@@ -46,7 +46,7 @@ ROS 2 wrapper which enables advanced control interfaces such as `ros2_control` a
 
 
 # Hardware
-The motor should be accessible via a SocketCAN interface. This can be accomplished with a USB CAN adapter, Raspberry Pi HAT, or built-in CAN interface like on an NVIDIA Orin. Don't forget to power the motor with 24V, configure CAN termination resistors, and set the motor ID; from the factory the ID is 0, which is invalid for GM6020.
+The motor should be accessible via a SocketCAN interface. This can be accomplished with a USB CAN adapter, Raspberry Pi HAT, or built-in CAN interface like on an NVIDIA Orin. Don't forget to power the motor with 24V, configure CAN termination resistors, and set the motor ID; from the factory the ID is 0, which is invalid for GM6020. GM6020 ID 1-4 cannot coexist with M3508/M2006 ID 5-8 due to overlapping CAN Bus addresses.
 
 
 # Build

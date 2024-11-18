@@ -30,14 +30,8 @@ pub extern "C" fn id_max(motor_type: MotorType) -> u8 {
 }
 const POS_MAX   : u16 = 8191;
 pub const RPM_PER_ANGULAR : f64 = 60.0/(2.0*3.14159);
-#[no_mangle]
-pub extern "C" fn rpm_per_v(motor_type: MotorType) -> f64 {
-    match motor_type {
-        MotorType::GM6020 => 13.33,
-        MotorType::M3508  => 17.71,
-        MotorType::M2006  =>  3.13,
-    }
-}
+pub const RPM_PER_V: f64 = 13.33; // GM6020 only
+
 // Amps ("torque current")
 #[no_mangle]
 pub extern "C" fn i_max(motor_type: MotorType) -> f64 {
@@ -129,6 +123,8 @@ struct Feedback {
     temperature: u16, // C
 }
 
+// Technically we could handle more than 8 motors at once since the M3508 and GM6020 ID ranges only
+// partially overlap. However, that would greatly complicate things and it is a rare use case.
 const ARR_LEN: usize = 8;
 #[derive(Default)]
 #[repr(C)]
@@ -194,16 +190,25 @@ pub fn init_motor(rm_motors_can: Arc<RmMotorsCan>, id: u8, motor_type: MotorType
         return Err(format!("Attempting to initialize motor {} in {} mode, but it is an {} which only accepts Current or Torque commands", id, mode, motor_type));
     }
     let idx: usize = (id-1) as usize;
+
     // Check for ID collisions - this is a limitation of DJI's address scheme
-    for i in 0 .. ARR_LEN {
-        if i == idx {continue;}
-        if ( motor_type == MotorType::GM6020 && id < 5  && rm_motors_can.modes.read().unwrap()[i] != CmdMode::Disabled && rm_motors_can.motor_types.read().unwrap()[i] == MotorType::M3508 ) ||
-           ( (motor_type == MotorType::M3508 || motor_type == MotorType::M2006) && id > 4  && rm_motors_can.modes.read().unwrap()[i] != CmdMode::Disabled && rm_motors_can.motor_types.read().unwrap()[i] == MotorType::GM6020 ){
-            return Err(format!("GM6020 ID 1-4 cannot coexist with {} ID 5-8", motor_type));
+    if motor_type == MotorType::GM6020 && id < 5 {
+        for i in 4 .. 8 {
+            if rm_motors_can.modes.read().unwrap()[i] == CmdMode::Disabled {continue;}
+            let i_type : MotorType = rm_motors_can.motor_types.read().unwrap()[i];
+            if i_type == MotorType::M3508 || i_type == MotorType::M2006 {
+                return Err(format!("GM6020 ID 1-4 cannot coexist with {} ID 5-8", i_type));
+            }
         }
     }
-
-    if (motor_type == MotorType::M3508 || motor_type == MotorType::M2006) && id > 4 {
+    else if (motor_type == MotorType::M3508 || motor_type == MotorType::M2006) && id > 4 {
+        for i in 0 .. 5 {
+            if rm_motors_can.modes.read().unwrap()[i] == CmdMode::Disabled {continue;}
+            if rm_motors_can.motor_types.read().unwrap()[i] == MotorType::GM6020 {
+                return Err(format!("{} ID 5-8 cannot coexist with GM6020 ID 1-4", motor_type));
+            }
+        }
+        // Set the flag to indicate we will be parsing CAN ID range 0x205-0x208 as m3508/m2006
         *rm_motors_can.upper_3508.write().unwrap() = true;
     }
 
@@ -277,7 +282,7 @@ pub fn run_once(rm_motors_can: Arc<RmMotorsCan>) -> Result<i32, String>{
     rx_fb(rm_motors_can.clone())?;
 
     // Loop through all motors and check which combinations of IdRange and CmdMode actually need to be sent
-    let mut r: Result<i32, String> = Ok(0);
+    let mut flags: [bool; ARR_LEN+1] = [false; ARR_LEN+1];
     for i in 0 .. ARR_LEN {
         let mode: CmdMode = match rm_motors_can.modes.read().unwrap()[i] {
             CmdMode::Current  => CmdMode::Current,
@@ -286,24 +291,38 @@ pub fn run_once(rm_motors_can: Arc<RmMotorsCan>) -> Result<i32, String>{
             CmdMode::Velocity => CmdMode::Voltage,
             CmdMode::Disabled => CmdMode::Disabled,
         };
-        if mode == CmdMode::Disabled {
-            continue;
-        }
-        r = r.and_then(
-            |_| match (mode, IdRange::from_u8(i as u8 + ID_MIN), rm_motors_can.motor_types.read().unwrap()[i]) {
-                (CmdMode::Voltage, IdRange::Low , MotorType::GM6020) => tx_cmd(rm_motors_can.clone(), CMD_ID_V_L_6020, IdRange::Low),
-                (CmdMode::Voltage, IdRange::High, MotorType::GM6020) => tx_cmd(rm_motors_can.clone(), CMD_ID_V_H_6020, IdRange::High),
-                (CmdMode::Current, IdRange::Low , MotorType::GM6020) => tx_cmd(rm_motors_can.clone(), CMD_ID_I_L_6020, IdRange::Low),
-                (CmdMode::Current, IdRange::High, MotorType::GM6020) => tx_cmd(rm_motors_can.clone(), CMD_ID_I_H_6020, IdRange::High),
-                (CmdMode::Current, IdRange::Low , MotorType::M3508 ) => tx_cmd(rm_motors_can.clone(), CMD_ID_I_L_3508, IdRange::Low),
-                (CmdMode::Current, IdRange::Low , MotorType::M2006 ) => tx_cmd(rm_motors_can.clone(), CMD_ID_I_L_2006, IdRange::Low),
-                (CmdMode::Current, IdRange::High, MotorType::M3508 ) => tx_cmd(rm_motors_can.clone(), CMD_ID_I_H_3508, IdRange::High),
-                (CmdMode::Current, IdRange::High, MotorType::M2006 ) => tx_cmd(rm_motors_can.clone(), CMD_ID_I_H_2006, IdRange::High),
-                (_, _, _) => Err(format!("Unknown combination of CmdMode, IdRange, MotorType in run_once")),
-            }
-        );
-    };
+        if mode == CmdMode::Disabled {continue;}
+        flags[match (mode, IdRange::from_u8(i as u8 + ID_MIN), rm_motors_can.motor_types.read().unwrap()[i]) {
+            (CmdMode::Voltage, IdRange::Low , MotorType::GM6020) => 0,
+            (CmdMode::Voltage, IdRange::High, MotorType::GM6020) => 1,
+            (CmdMode::Current, IdRange::Low , MotorType::GM6020) => 2,
+            (CmdMode::Current, IdRange::High, MotorType::GM6020) => 3,
+            (CmdMode::Current, IdRange::Low , MotorType::M3508 ) => 4,
+            (CmdMode::Current, IdRange::Low , MotorType::M2006 ) => 5,
+            (CmdMode::Current, IdRange::High, MotorType::M3508 ) => 6,
+            (CmdMode::Current, IdRange::High, MotorType::M2006 ) => 7,
+            (_, _, _) => 8,
+        }] = true;
+    }
     // Send the commands, accumulating the results to return
+    let mut r: Result<i32, String> = Ok(0);
+    for i in 0 .. ARR_LEN {
+        if flags[i] {
+            r = r.and_then(
+                |_| match i {
+                    0 => tx_cmd(rm_motors_can.clone(), CMD_ID_V_L_6020, IdRange::Low),
+                    1 => tx_cmd(rm_motors_can.clone(), CMD_ID_V_H_6020, IdRange::High),
+                    2 => tx_cmd(rm_motors_can.clone(), CMD_ID_I_L_6020, IdRange::Low),
+                    3 => tx_cmd(rm_motors_can.clone(), CMD_ID_I_H_6020, IdRange::High),
+                    4 => tx_cmd(rm_motors_can.clone(), CMD_ID_I_L_3508, IdRange::Low),
+                    5 => tx_cmd(rm_motors_can.clone(), CMD_ID_I_L_2006, IdRange::Low),
+                    6 => tx_cmd(rm_motors_can.clone(), CMD_ID_I_H_3508, IdRange::High),
+                    7 => tx_cmd(rm_motors_can.clone(), CMD_ID_I_H_2006, IdRange::High),
+                    _ => return Err(format!("Unknown combination of CmdMode, IdRange, MotorType in run_once")),
+                }
+            );
+        }
+    }
     return r;
 }
 
@@ -326,7 +345,7 @@ pub fn set_cmd(rm_motors_can: Arc<RmMotorsCan>, id: u8, cmd: f64) -> Result<i32,
     }
     if mode == CmdMode::Velocity {
         mode = CmdMode::Voltage;
-        cmd_actual*=RPM_PER_ANGULAR/rpm_per_v(motor_type);
+        cmd_actual*=RPM_PER_ANGULAR/RPM_PER_V;
     }
     // Limit to max allowable command values
     if mode == CmdMode::Voltage && cmd_actual.abs() > V_MAX {
