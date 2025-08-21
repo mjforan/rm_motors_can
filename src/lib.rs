@@ -54,7 +54,7 @@ generate_wrapper!(get_state,  (id: u8, field: FbField), f64);
 
 
 #[link(name = "rm_motors_can_test_cpp")]
-extern { fn rm_motors_can_test_cpp() -> i32; }
+extern "C" { fn rm_motors_can_test_cpp() -> i32; }
 // TODO this is only here due to a bug in the cc crate preventing c++ in examples: https://github.com/rust-lang/cc-rs/issues/1206
 pub unsafe fn cpp_example(){
     std::process::exit(rm_motors_can_test_cpp());
