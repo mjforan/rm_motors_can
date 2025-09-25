@@ -415,11 +415,11 @@ fn rx_fb(rm_motors_can: Arc<RmMotorsCan>) -> Result<i32, String> {
                 let rxid: u16 = frame.raw_id() as u16;
                 let id: u8;
                 // M3508 ID range
-                if rxid < 0x204 || (rxid >= 0x204 && rxid <= 0x208 && *rm_motors_can.upper_3508.read().unwrap()) {
+                if rxid <= 0x204 || (rxid > 0x204 && rxid <= 0x208 && *rm_motors_can.upper_3508.read().unwrap()) {
                     id = (rxid-FB_ID_BASE_3508) as u8;
                 }
                 // MG6020 ID range
-                else if rxid >= 0x204 && rxid <= 0x20B {
+                else if rxid > 0x204 && rxid <= 0x20B {
                     id = (rxid-FB_ID_BASE_6020) as u8;
                 }
                 else {
