@@ -42,11 +42,11 @@ Unfortunately the C header does not contain "fully-qualified" names. Ideally eac
 
 
 # [`rm_motors_ros`](https://github.com/mjforan/rm_motors_ros/)
-ROS 2 wrapper which enables advanced control interfaces such as `ros2_control` and `MoveIt`. Talk about layers of abstraction! This repo has an example hardware setup and `CMakeLists.txt`.
+ROS 2 wrapper which enables advanced control interfaces such as `ros2_control` and `MoveIt`. This repo has an example hardware setup and `CMakeLists.txt`.
 
 
 # Hardware
-The motor should be accessible via a SocketCAN interface. This can be accomplished with a USB CAN adapter, Raspberry Pi HAT, or built-in CAN interface like on an NVIDIA Orin. Don't forget to power the motor with 24V, configure CAN termination resistors, and set the motor ID; from the factory the ID is 0, which is invalid for GM6020. GM6020 ID 1-4 cannot coexist with M3508/M2006 ID 5-8 due to overlapping CAN Bus addresses.
+The motor should be accessible via a SocketCAN interface. This can be accomplished with a USB CAN adapter, Raspberry Pi HAT, or built-in CAN interface like on an NVIDIA Orin. Don't forget to power the motor with 24V, configure CAN termination resistors, and set the motor ID; from the factory the ID is 0, which is invalid. GM6020 ID 1-4 cannot coexist with M3508/M2006 ID 5-8 due to overlapping CAN Bus addresses.
 
 
 # Build
